@@ -31,9 +31,10 @@
       <section class="card upload-card">
         <div class="card-header">
           <h2><span class="icon">📸</span> Batch Upload Vehicle Photos</h2>
-          <p>Select or drop multiple car photos. Only valid license plates matching <code>xx-nnn-xx</code>, <code>xx-nnnn</code>, or <code>xxx-nnn</code> will be confirmed and saved.</p>
+          <p>Select or drop car photos anytime. Only valid license plates matching <code>xx-nnn-xx</code>, <code>xx-nnnn</code>, or <code>xxx-nnn</code> will be confirmed and saved.</p>
         </div>
 
+        <!-- Persistent Drop Zone -->
         <div class="drop-zone" id="dropZone">
           <input type="file" id="fileInput" accept="image/*" multiple class="file-input">
           <div class="drop-zone-content" id="dropZoneContent">
@@ -44,8 +45,8 @@
                 <line x1="12" y1="3" x2="12" y2="15"></line>
               </svg>
             </div>
-            <p class="drop-title">Drag & Drop car images here (Select multiple files)</p>
-            <p class="drop-sub">or <span class="browse-link">browse files</span> from your device</p>
+            <p class="drop-title">Drag & Drop car images here or click to choose multiple files</p>
+            <p class="drop-sub">You can upload as many times as you like!</p>
             <span class="file-types-tag">Supported formats: XX-NNN-XX, XX-NNNN, XXX-NNN</span>
           </div>
         </div>
@@ -59,7 +60,7 @@
         <!-- Batch Results Status Table (No Thumbnails) -->
         <div class="uploads-summary-container hidden" id="uploadsSummaryContainer">
           <div class="summary-header">
-            <h3>📋 Upload Processing Summary</h3>
+            <h3>📋 Upload Processing Log</h3>
             <div class="summary-pills">
               <span class="pill confirmed-pill" id="summaryConfirmedCount">0 Confirmed</span>
               <span class="pill declined-pill" id="summaryDeclinedCount">0 Declined</span>
@@ -84,7 +85,8 @@
           </div>
 
           <div class="summary-actions">
-            <button class="btn btn-secondary btn-sm" id="btnResetUpload">Upload More Images</button>
+            <button class="btn btn-primary btn-sm" id="btnUploadMore">+ Add More Photos</button>
+            <button class="btn btn-secondary btn-sm" id="btnClearLog">Clear Log</button>
           </div>
         </div>
       </section>

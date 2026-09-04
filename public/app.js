@@ -8,7 +8,8 @@ document.addEventListener('DOMContentLoaded', () => {
   const batchStatusTableBody = document.getElementById('batchStatusTableBody');
   const summaryConfirmedCount = document.getElementById('summaryConfirmedCount');
   const summaryDeclinedCount = document.getElementById('summaryDeclinedCount');
-  const btnResetUpload = document.getElementById('btnResetUpload');
+  const btnUploadMore = document.getElementById('btnUploadMore');
+  const btnClearLog = document.getElementById('btnClearLog');
 
   const searchInput = document.getElementById('searchInput');
   const clearSearchBtn = document.getElementById('clearSearchBtn');
@@ -19,6 +20,10 @@ document.addEventListener('DOMContentLoaded', () => {
   const emptyState = document.getElementById('emptyState');
   const statusIndicator = document.getElementById('statusIndicator');
   const statusText = document.getElementById('statusText');
+
+  let accumulatedResults = [];
+  let totalConfirmed = 0;
+  let totalDeclined = 0;
 
   // Check System Health
   async function checkHealth() {
@@ -69,11 +74,17 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   });
 
-  btnResetUpload.addEventListener('click', () => {
-    fileInput.value = '';
-    dropZone.classList.remove('hidden');
+  btnUploadMore.addEventListener('click', () => {
+    fileInput.click();
+  });
+
+  btnClearLog.addEventListener('click', () => {
+    accumulatedResults = [];
+    totalConfirmed = 0;
+    totalDeclined = 0;
+    batchStatusTableBody.innerHTML = '';
     uploadsSummaryContainer.classList.add('hidden');
-    processingBar.classList.add('hidden');
+    fileInput.value = '';
   });
 
   // --- Batch File Upload Processing ---
@@ -86,9 +97,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     // Update UI State
-    dropZone.classList.add('hidden');
     processingBar.classList.remove('hidden');
-    uploadsSummaryContainer.classList.add('hidden');
     processingText.textContent = `Analyzing ${files.length} image(s) for valid license plates...`;
 
     const formData = new FormData();
@@ -105,9 +114,10 @@ document.addEventListener('DOMContentLoaded', () => {
       const result = await response.json();
 
       processingBar.classList.add('hidden');
+      fileInput.value = ''; // Reset file input so user can re-upload same file if needed
 
       if (response.ok && result.success) {
-        renderUploadSummary(result);
+        appendUploadSummary(result);
         // Refresh confirmed records database list
         fetchSpottedPlates(searchInput.value.trim());
       } else {
@@ -118,19 +128,22 @@ document.addEventListener('DOMContentLoaded', () => {
       console.error('Batch Upload Error:', error);
       processingBar.classList.add('hidden');
       alert(`Upload Error: ${error.message}`);
-      dropZone.classList.remove('hidden');
     }
   }
 
-  // Render Upload Processing Summary Table (No Thumbnails)
-  function renderUploadSummary(batchResult) {
+  // Append Upload Results to Log Table
+  function appendUploadSummary(batchResult) {
     uploadsSummaryContainer.classList.remove('hidden');
-    batchStatusTableBody.innerHTML = '';
 
-    summaryConfirmedCount.textContent = `${batchResult.confirmed} Confirmed`;
-    summaryDeclinedCount.textContent = `${batchResult.declined} Declined`;
+    totalConfirmed += batchResult.confirmed;
+    totalDeclined += batchResult.declined;
+
+    summaryConfirmedCount.textContent = `${totalConfirmed} Confirmed`;
+    summaryDeclinedCount.textContent = `${totalDeclined} Declined`;
 
     batchResult.results.forEach(item => {
+      accumulatedResults.unshift(item); // prepend latest
+
       const row = document.createElement('tr');
 
       const isConfirmed = item.status === 'Confirmed';
@@ -147,7 +160,7 @@ document.addEventListener('DOMContentLoaded', () => {
         : `<span style="color: var(--text-dim);">-</span>`;
 
       const detailsCell = isConfirmed
-        ? `<span style="color: #34d399;">Valid license plate format saved</span>`
+        ? `<span style="color: #34d399;">Valid plate format saved to database</span>`
         : `<span style="color: #f87171;">${item.reason || 'Invalid format'}</span>`;
 
       row.innerHTML = `
@@ -158,7 +171,8 @@ document.addEventListener('DOMContentLoaded', () => {
         <td>${detailsCell}</td>
       `;
 
-      batchStatusTableBody.appendChild(row);
+      // Insert at top of status table
+      batchStatusTableBody.insertBefore(row, batchStatusTableBody.firstChild);
     });
   }
 
