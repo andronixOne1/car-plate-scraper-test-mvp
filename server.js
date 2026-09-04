@@ -85,6 +85,106 @@ initFirebase();
 const db = admin.apps.length ? admin.firestore() : null;
 const bucket = admin.apps.length ? admin.storage().bucket() : null;
 
+// --- License Plate Extraction & Character Repair ---
+function fixLetters(str) {
+  return str
+    .replace(/0/g, 'O')
+    .replace(/1/g, 'I')
+    .replace(/2/g, 'Z')
+    .replace(/5/g, 'S')
+    .replace(/8/g, 'B');
+}
+
+function fixDigits(str) {
+  return str
+    .replace(/O/g, '0')
+    .replace(/Q/g, '0')
+    .replace(/I/g, '1')
+    .replace(/L/g, '1')
+    .replace(/Z/g, '2')
+    .replace(/S/g, '5')
+    .replace(/B/g, '8');
+}
+
+function extractLicensePlate(rawText) {
+  if (!rawText) return { isValid: false, formattedPlate: null, formatType: null };
+
+  const normalized = rawText.toUpperCase()
+    .replace(/[—–_·•:]+/g, '-')
+    .replace(/[\r\n]+/g, ' ')
+    .replace(/\s*-\s*/g, '-');
+
+  const cleaned = normalized.replace(/\b(GE|EU|AM|AZ|TR|UA|MD|RO|BG|PL|DE|FR|IT|ES)[-\s]+/gi, '');
+  const textsToTry = [cleaned, normalized, rawText.toUpperCase().replace(/[\r\n]+/g, ' ')];
+
+  for (const t of textsToTry) {
+    const m1 = t.match(/(?:^|[^A-Z0-9])([A-Z0-9]{2})[- ]*([A-Z0-9]{3})[- ]*([A-Z0-9]{2})(?:$|[^A-Z0-9])/);
+    if (m1) {
+      const p1 = fixLetters(m1[1]), p2 = fixDigits(m1[2]), p3 = fixLetters(m1[3]);
+      if (/^[A-Z]{2}$/.test(p1) && /^\d{3}$/.test(p2) && /^[A-Z]{2}$/.test(p3)) {
+        return { isValid: true, formattedPlate: `${p1}-${p2}-${p3}`, formatType: 'XX-NNN-XX' };
+      }
+    }
+
+    const m2 = t.match(/(?:^|[^A-Z0-9])([A-Z0-9]{2})[- ]*([A-Z0-9]{4})(?:$|[^A-Z0-9])/);
+    if (m2) {
+      const p1 = fixLetters(m2[1]), p2 = fixDigits(m2[2]);
+      if (/^[A-Z]{2}$/.test(p1) && /^\d{4}$/.test(p2)) {
+        return { isValid: true, formattedPlate: `${p1}-${p2}`, formatType: 'XX-NNNN' };
+      }
+    }
+
+    const m3 = t.match(/(?:^|[^A-Z0-9])([A-Z0-9]{3})[- ]*([A-Z0-9]{3})(?:$|[^A-Z0-9])/);
+    if (m3) {
+      const p1 = fixLetters(m3[1]), p2 = fixDigits(m3[2]);
+      if (/^[A-Z]{3}$/.test(p1) && /^\d{3}$/.test(p2)) {
+        return { isValid: true, formattedPlate: `${p1}-${p2}`, formatType: 'XXX-NNN' };
+      }
+    }
+
+    const m4 = t.match(/(?:^|[^A-Z0-9])([A-Z0-9]{4})[- ]*([A-Z0-9]{2})(?:$|[^A-Z0-9])/);
+    if (m4) {
+      const p1 = fixDigits(m4[1]), p2 = fixLetters(m4[2]);
+      if (/^\d{4}$/.test(p1) && /^[A-Z]{2}$/.test(p2)) {
+        return { isValid: true, formattedPlate: `${p1}-${p2}`, formatType: 'NNNN-XX' };
+      }
+    }
+  }
+
+  const tokens = normalized.match(/[A-Z0-9]{6,12}/g) || [];
+  for (const token of tokens) {
+    if (token.length === 7) {
+      const p1 = fixLetters(token.slice(0, 2)), p2 = fixDigits(token.slice(2, 5)), p3 = fixLetters(token.slice(5, 7));
+      if (/^[A-Z]{2}$/.test(p1) && /^\d{3}$/.test(p2) && /^[A-Z]{2}$/.test(p3)) {
+        return { isValid: true, formattedPlate: `${p1}-${p2}-${p3}`, formatType: 'XX-NNN-XX' };
+      }
+    }
+    if (token.length === 9) {
+      const sub = token.slice(2);
+      const p1 = fixLetters(sub.slice(0, 2)), p2 = fixDigits(sub.slice(2, 5)), p3 = fixLetters(sub.slice(5, 7));
+      if (/^[A-Z]{2}$/.test(p1) && /^\d{3}$/.test(p2) && /^[A-Z]{2}$/.test(p3)) {
+        return { isValid: true, formattedPlate: `${p1}-${p2}-${p3}`, formatType: 'XX-NNN-XX' };
+      }
+    }
+    if (token.length === 6) {
+      const p1 = fixLetters(token.slice(0, 2)), p2 = fixDigits(token.slice(2, 6));
+      if (/^[A-Z]{2}$/.test(p1) && /^\d{4}$/.test(p2)) {
+        return { isValid: true, formattedPlate: `${p1}-${p2}`, formatType: 'XX-NNNN' };
+      }
+      const q1 = fixLetters(token.slice(0, 3)), q2 = fixDigits(token.slice(3, 6));
+      if (/^[A-Z]{3}$/.test(q1) && /^\d{3}$/.test(q2)) {
+        return { isValid: true, formattedPlate: `${q1}-${q2}`, formatType: 'XXX-NNN' };
+      }
+      const r1 = fixDigits(token.slice(0, 4)), r2 = fixLetters(token.slice(4, 6));
+      if (/^\d{4}$/.test(r1) && /^[A-Z]{2}$/.test(r2)) {
+        return { isValid: true, formattedPlate: `${r1}-${r2}`, formatType: 'NNNN-XX' };
+      }
+    }
+  }
+
+  return { isValid: false, formattedPlate: null, formatType: null };
+}
+
 /**
  * POST /api/upload
  */
@@ -96,15 +196,36 @@ app.post('/api/upload', upload.array('images', 10), async (req, res) => {
       return res.status(400).json({ error: 'No image files uploaded.' });
     }
 
-    const plateNumber = req.body.plate_number || null;
-    const formatType = req.body.format_type || null;
-    const isConfirmed = req.body.status === 'Confirmed' && plateNumber;
-    const rawText = req.body.raw_text || '';
+    const initialPlateNumber = req.body.plate_number || null;
+    const initialFormatType = req.body.format_type || null;
+    let isConfirmed = req.body.status === 'Confirmed' && initialPlateNumber;
+    let rawText = req.body.raw_text || '';
+    let plateNumber = initialPlateNumber;
+    let formatType = initialFormatType;
 
     const results = [];
 
     for (const file of files) {
       const fileName = file.originalname;
+
+      // Server-side fallback OCR check if client did not detect plate
+      if (!isConfirmed && file.buffer) {
+        try {
+          const tesseract = require('tesseract.js');
+          const serverOcr = await tesseract.recognize(file.buffer, 'eng');
+          const serverText = serverOcr.data.text || '';
+          const serverValidation = extractLicensePlate(serverText);
+          if (serverValidation.isValid) {
+            plateNumber = serverValidation.formattedPlate;
+            formatType = serverValidation.formatType;
+            isConfirmed = true;
+            rawText = (rawText ? rawText + ' | ' : '') + serverText;
+            console.log(`✅ Server OCR fallback rescued plate: ${plateNumber} (${formatType})`);
+          }
+        } catch (ocrErr) {
+          console.warn('Server fallback OCR error:', ocrErr.message);
+        }
+      }
 
       if (!isConfirmed) {
         results.push({

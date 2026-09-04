@@ -95,90 +95,112 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // --- OCR Positional Character Repairs & Format Validation ---
   function fixLetters(str) {
-    return str.replace(/0/g, 'O').replace(/1/g, 'I').replace(/2/g, 'Z').replace(/5/g, 'S').replace(/8/g, 'B');
+    return str
+      .replace(/0/g, 'O')
+      .replace(/1/g, 'I')
+      .replace(/2/g, 'Z')
+      .replace(/5/g, 'S')
+      .replace(/8/g, 'B');
   }
 
   function fixDigits(str) {
-    return str.replace(/O/g, '0').replace(/Q/g, '0').replace(/I/g, '1').replace(/L/g, '1').replace(/Z/g, '2').replace(/S/g, '5').replace(/B/g, '8');
+    return str
+      .replace(/O/g, '0')
+      .replace(/Q/g, '0')
+      .replace(/I/g, '1')
+      .replace(/L/g, '1')
+      .replace(/Z/g, '2')
+      .replace(/S/g, '5')
+      .replace(/B/g, '8');
   }
 
   /**
-   * License Plate Extractor (Supports 4 Formats)
-   * 1) XX-NNN-XX  (e.g. AB-123-CD)
+   * Resilient License Plate Extractor (Supports 4 Formats)
+   * 1) XX-NNN-XX  (e.g. BI-888-DA, AB-123-CD)
    * 2) XX-NNNN    (e.g. AB-1234)
    * 3) XXX-NNN    (e.g. ABC-123)
    * 4) NNNN-XX    (e.g. 1234-AB)
+   * Handles country flags (GE, EU, etc.), dashes, spaces, and OCR noise.
    */
   function extractLicensePlate(rawText) {
     if (!rawText) return { isValid: false, formattedPlate: null, formatType: null };
-    const text = rawText.toUpperCase().replace(/[\r\n]+/g, ' ');
 
-    // 1. Direct Regex Search
-    // Format 1: XX-NNN-XX
-    const m1 = text.match(/\b([A-Z0-9]{2})[- ]?([A-Z0-9]{3})[- ]?([A-Z0-9]{2})\b/);
-    if (m1) {
-      const p1 = fixLetters(m1[1]), p2 = fixDigits(m1[2]), p3 = fixLetters(m1[3]);
-      if (/^[A-Z]{2}$/.test(p1) && /^\d{3}$/.test(p2) && /^[A-Z]{2}$/.test(p3)) {
-        return { isValid: true, formattedPlate: `${p1}-${p2}-${p3}`, formatType: 'XX-NNN-XX' };
-      }
-    }
+    // 1. Normalize separators
+    const normalized = rawText.toUpperCase()
+      .replace(/[—–_·•:]+/g, '-')
+      .replace(/[\r\n]+/g, ' ')
+      .replace(/\s*-\s*/g, '-');
 
-    // Format 2: XX-NNNN
-    const m2 = text.match(/\b([A-Z0-9]{2})[- ]?([A-Z0-9]{4})\b/);
-    if (m2) {
-      const p1 = fixLetters(m2[1]), p2 = fixDigits(m2[2]);
-      if (/^[A-Z]{2}$/.test(p1) && /^\d{4}$/.test(p2)) {
-        return { isValid: true, formattedPlate: `${p1}-${p2}`, formatType: 'XX-NNNN' };
-      }
-    }
+    // Strip known country flag prefixes on left (GE, EU, AM, AZ, TR, UA, MD, etc.)
+    const cleaned = normalized.replace(/\b(GE|EU|AM|AZ|TR|UA|MD|RO|BG|PL|DE|FR|IT|ES)[-\s]+/gi, '');
 
-    // Format 3: XXX-NNN
-    const m3 = text.match(/\b([A-Z0-9]{3})[- ]?([A-Z0-9]{3})\b/);
-    if (m3) {
-      const p1 = fixLetters(m3[1]), p2 = fixDigits(m3[2]);
-      if (/^[A-Z]{3}$/.test(p1) && /^\d{3}$/.test(p2)) {
-        return { isValid: true, formattedPlate: `${p1}-${p2}`, formatType: 'XXX-NNN' };
-      }
-    }
+    const textsToTry = [cleaned, normalized, rawText.toUpperCase().replace(/[\r\n]+/g, ' ')];
 
-    // Format 4: NNNN-XX (4 digits, 2 letters)
-    const m4 = text.match(/\b([A-Z0-9]{4})[- ]?([A-Z0-9]{2})\b/);
-    if (m4) {
-      const p1 = fixDigits(m4[1]), p2 = fixLetters(m4[2]);
-      if (/^\d{4}$/.test(p1) && /^[A-Z]{2}$/.test(p2)) {
-        return { isValid: true, formattedPlate: `${p1}-${p2}`, formatType: 'NNNN-XX' };
-      }
-    }
-
-    // 2. Token-by-token scan for unhyphenated license plate strings
-    const tokens = text.match(/[A-Z0-9-]{6,12}/g) || [];
-    for (const token of tokens) {
-      const cleanToken = token.replace(/[^A-Z0-9]/g, '');
-
-      // Format 1: XX-NNN-XX (Length 7)
-      if (cleanToken.length === 7) {
-        const p1 = fixLetters(cleanToken.slice(0, 2)), p2 = fixDigits(cleanToken.slice(2, 5)), p3 = fixLetters(cleanToken.slice(5, 7));
+    for (const t of textsToTry) {
+      // Format 1: XX-NNN-XX
+      const m1 = t.match(/(?:^|[^A-Z0-9])([A-Z0-9]{2})[- ]*([A-Z0-9]{3})[- ]*([A-Z0-9]{2})(?:$|[^A-Z0-9])/);
+      if (m1) {
+        const p1 = fixLetters(m1[1]), p2 = fixDigits(m1[2]), p3 = fixLetters(m1[3]);
         if (/^[A-Z]{2}$/.test(p1) && /^\d{3}$/.test(p2) && /^[A-Z]{2}$/.test(p3)) {
           return { isValid: true, formattedPlate: `${p1}-${p2}-${p3}`, formatType: 'XX-NNN-XX' };
         }
       }
 
-      // Length 6: XX-NNNN or XXX-NNN or NNNN-XX
-      if (cleanToken.length === 6) {
-        // XX-NNNN
-        const p1 = fixLetters(cleanToken.slice(0, 2)), p2 = fixDigits(cleanToken.slice(2, 6));
+      // Format 2: XX-NNNN
+      const m2 = t.match(/(?:^|[^A-Z0-9])([A-Z0-9]{2})[- ]*([A-Z0-9]{4})(?:$|[^A-Z0-9])/);
+      if (m2) {
+        const p1 = fixLetters(m2[1]), p2 = fixDigits(m2[2]);
         if (/^[A-Z]{2}$/.test(p1) && /^\d{4}$/.test(p2)) {
           return { isValid: true, formattedPlate: `${p1}-${p2}`, formatType: 'XX-NNNN' };
         }
+      }
 
-        // XXX-NNN
-        const q1 = fixLetters(cleanToken.slice(0, 3)), q2 = fixDigits(cleanToken.slice(3, 6));
+      // Format 3: XXX-NNN
+      const m3 = t.match(/(?:^|[^A-Z0-9])([A-Z0-9]{3})[- ]*([A-Z0-9]{3})(?:$|[^A-Z0-9])/);
+      if (m3) {
+        const p1 = fixLetters(m3[1]), p2 = fixDigits(m3[2]);
+        if (/^[A-Z]{3}$/.test(p1) && /^\d{3}$/.test(p2)) {
+          return { isValid: true, formattedPlate: `${p1}-${p2}`, formatType: 'XXX-NNN' };
+        }
+      }
+
+      // Format 4: NNNN-XX
+      const m4 = t.match(/(?:^|[^A-Z0-9])([A-Z0-9]{4})[- ]*([A-Z0-9]{2})(?:$|[^A-Z0-9])/);
+      if (m4) {
+        const p1 = fixDigits(m4[1]), p2 = fixLetters(m4[2]);
+        if (/^\d{4}$/.test(p1) && /^[A-Z]{2}$/.test(p2)) {
+          return { isValid: true, formattedPlate: `${p1}-${p2}`, formatType: 'NNNN-XX' };
+        }
+      }
+    }
+
+    // 2. Token-by-token scan with sliding window
+    const tokens = normalized.match(/[A-Z0-9]{6,12}/g) || [];
+    for (const token of tokens) {
+      if (token.length === 7) {
+        const p1 = fixLetters(token.slice(0, 2)), p2 = fixDigits(token.slice(2, 5)), p3 = fixLetters(token.slice(5, 7));
+        if (/^[A-Z]{2}$/.test(p1) && /^\d{3}$/.test(p2) && /^[A-Z]{2}$/.test(p3)) {
+          return { isValid: true, formattedPlate: `${p1}-${p2}-${p3}`, formatType: 'XX-NNN-XX' };
+        }
+      }
+      if (token.length === 9) {
+        // e.g. country prefix + plate (GEBI888DA -> BI888DA)
+        const sub = token.slice(2);
+        const p1 = fixLetters(sub.slice(0, 2)), p2 = fixDigits(sub.slice(2, 5)), p3 = fixLetters(sub.slice(5, 7));
+        if (/^[A-Z]{2}$/.test(p1) && /^\d{3}$/.test(p2) && /^[A-Z]{2}$/.test(p3)) {
+          return { isValid: true, formattedPlate: `${p1}-${p2}-${p3}`, formatType: 'XX-NNN-XX' };
+        }
+      }
+      if (token.length === 6) {
+        const p1 = fixLetters(token.slice(0, 2)), p2 = fixDigits(token.slice(2, 6));
+        if (/^[A-Z]{2}$/.test(p1) && /^\d{4}$/.test(p2)) {
+          return { isValid: true, formattedPlate: `${p1}-${p2}`, formatType: 'XX-NNNN' };
+        }
+        const q1 = fixLetters(token.slice(0, 3)), q2 = fixDigits(token.slice(3, 6));
         if (/^[A-Z]{3}$/.test(q1) && /^\d{3}$/.test(q2)) {
           return { isValid: true, formattedPlate: `${q1}-${q2}`, formatType: 'XXX-NNN' };
         }
-
-        // NNNN-XX
-        const r1 = fixDigits(cleanToken.slice(0, 4)), r2 = fixLetters(cleanToken.slice(4, 6));
+        const r1 = fixDigits(token.slice(0, 4)), r2 = fixLetters(token.slice(4, 6));
         if (/^\d{4}$/.test(r1) && /^[A-Z]{2}$/.test(r2)) {
           return { isValid: true, formattedPlate: `${r1}-${r2}`, formatType: 'NNNN-XX' };
         }
@@ -188,35 +210,33 @@ document.addEventListener('DOMContentLoaded', () => {
     return { isValid: false, formattedPlate: null, formatType: null };
   }
 
-  // --- Canvas Preprocessor ---
-  function preprocessImageToCanvas(imageElement, cropLower = false) {
+  // --- Canvas Preprocessor with Gentle Grayscale & Smart Cropping ---
+  function preprocessImageToCanvas(imageElement, mode = 'natural') {
     const canvas = document.createElement('canvas');
     const ctx = canvas.getContext('2d');
 
+    const cropLower = mode === 'crop';
     const srcY = cropLower ? Math.floor(imageElement.naturalHeight * 0.35) : 0;
-    const srcH = cropLower ? Math.floor(imageElement.naturalHeight * 0.60) : imageElement.naturalHeight;
+    const srcH = cropLower ? Math.floor(imageElement.naturalHeight * 0.65) : imageElement.naturalHeight;
 
     canvas.width = imageElement.naturalWidth;
     canvas.height = srcH;
 
     ctx.drawImage(imageElement, 0, srcY, imageElement.naturalWidth, srcH, 0, 0, canvas.width, canvas.height);
 
-    // Apply High Contrast & Grayscale
-    const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-    const data = imgData.data;
-    const factor = (259 * (128 + 255)) / (255 * (259 - 128));
-
-    for (let i = 0; i < data.length; i += 4) {
-      let avg = 0.2126 * data[i] + 0.7152 * data[i+1] + 0.0722 * data[i+2];
-      let contrastAvg = factor * (avg - 128) + 128;
-      contrastAvg = Math.min(255, Math.max(0, contrastAvg));
-      data[i] = contrastAvg;
-      data[i+1] = contrastAvg;
-      data[i+2] = contrastAvg;
+    if (mode === 'grayscale') {
+      const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+      const data = imgData.data;
+      for (let i = 0; i < data.length; i += 4) {
+        const avg = 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
+        data[i] = avg;
+        data[i + 1] = avg;
+        data[i + 2] = avg;
+      }
+      ctx.putImageData(imgData, 0, 0);
     }
 
-    ctx.putImageData(imgData, 0, 0);
-    return canvas.toDataURL('image/jpeg', 0.92);
+    return canvas.toDataURL('image/jpeg', 0.95);
   }
 
   function loadImage(file) {
@@ -270,7 +290,6 @@ document.addEventListener('DOMContentLoaded', () => {
 
       try {
         const loadedImg = await loadImage(file);
-        const croppedDataUrl = preprocessImageToCanvas(loadedImg, true);
 
         // Smoothly animate Stage 2 OCR progress bar to 100%
         let progressInterval = setInterval(() => {
@@ -283,16 +302,34 @@ document.addEventListener('DOMContentLoaded', () => {
           }
         }, 150);
 
-        // Run Tesseract WASM Recognition
-        const res1 = await Tesseract.recognize(croppedDataUrl, 'eng');
+        // Pass 1: Clean Natural Image (Preserves crisp character edges)
+        const naturalDataUrl = preprocessImageToCanvas(loadedImg, 'natural');
+        const res1 = await Tesseract.recognize(naturalDataUrl, 'eng');
         rawText = res1.data.text || '';
         validation = extractLicensePlate(rawText);
 
+        // Pass 2: Lower Plate Zone Crop (Focuses on vehicle bumper)
         if (!validation.isValid) {
-          const fullDataUrl = preprocessImageToCanvas(loadedImg, false);
-          const res2 = await Tesseract.recognize(fullDataUrl, 'eng');
-          rawText += ' ' + (res2.data.text || '');
-          validation = extractLicensePlate(rawText);
+          const croppedDataUrl = preprocessImageToCanvas(loadedImg, 'crop');
+          const res2 = await Tesseract.recognize(croppedDataUrl, 'eng');
+          const text2 = res2.data.text || '';
+          rawText += ' ' + text2;
+          validation = extractLicensePlate(text2);
+          if (!validation.isValid) {
+            validation = extractLicensePlate(rawText);
+          }
+        }
+
+        // Pass 3: Grayscale
+        if (!validation.isValid) {
+          const grayDataUrl = preprocessImageToCanvas(loadedImg, 'grayscale');
+          const res3 = await Tesseract.recognize(grayDataUrl, 'eng');
+          const text3 = res3.data.text || '';
+          rawText += ' ' + text3;
+          validation = extractLicensePlate(text3);
+          if (!validation.isValid) {
+            validation = extractLicensePlate(rawText);
+          }
         }
 
         clearInterval(progressInterval);
