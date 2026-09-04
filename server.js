@@ -813,7 +813,7 @@ app.get('/api/search/:plate?', async (req, res) => {
 app.get('/api/health', (req, res) => {
   res.json({
     status: 'online',
-    version: '2.2.0-multi-angle-ocr',
+    version: '2.3.0-multi-plate-recognition',
     firebase_connected: !!db,
     storage_connected: !!bucket,
     timestamp: new Date()
