@@ -93,7 +93,7 @@ document.addEventListener('DOMContentLoaded', () => {
     fileInput.value = '';
   });
 
-  // --- OCR Character Repairs & Format Validation ---
+  // --- OCR Positional Character Repairs & Format Validation ---
   function fixLetters(str) {
     return str.replace(/0/g, 'O').replace(/1/g, 'I').replace(/2/g, 'Z').replace(/5/g, 'S').replace(/8/g, 'B');
   }
@@ -102,11 +102,19 @@ document.addEventListener('DOMContentLoaded', () => {
     return str.replace(/O/g, '0').replace(/Q/g, '0').replace(/I/g, '1').replace(/L/g, '1').replace(/Z/g, '2').replace(/S/g, '5').replace(/B/g, '8');
   }
 
+  /**
+   * License Plate Extractor (Supports 4 Formats)
+   * 1) XX-NNN-XX  (e.g. AB-123-CD)
+   * 2) XX-NNNN    (e.g. AB-1234)
+   * 3) XXX-NNN    (e.g. ABC-123)
+   * 4) NNNN-XX    (e.g. 1234-AB)
+   */
   function extractLicensePlate(rawText) {
     if (!rawText) return { isValid: false, formattedPlate: null, formatType: null };
     const text = rawText.toUpperCase().replace(/[\r\n]+/g, ' ');
 
     // 1. Direct Regex Search
+    // Format 1: XX-NNN-XX
     const m1 = text.match(/\b([A-Z0-9]{2})[- ]?([A-Z0-9]{3})[- ]?([A-Z0-9]{2})\b/);
     if (m1) {
       const p1 = fixLetters(m1[1]), p2 = fixDigits(m1[2]), p3 = fixLetters(m1[3]);
@@ -115,6 +123,7 @@ document.addEventListener('DOMContentLoaded', () => {
       }
     }
 
+    // Format 2: XX-NNNN
     const m2 = text.match(/\b([A-Z0-9]{2})[- ]?([A-Z0-9]{4})\b/);
     if (m2) {
       const p1 = fixLetters(m2[1]), p2 = fixDigits(m2[2]);
@@ -123,6 +132,7 @@ document.addEventListener('DOMContentLoaded', () => {
       }
     }
 
+    // Format 3: XXX-NNN
     const m3 = text.match(/\b([A-Z0-9]{3})[- ]?([A-Z0-9]{3})\b/);
     if (m3) {
       const p1 = fixLetters(m3[1]), p2 = fixDigits(m3[2]);
@@ -131,11 +141,21 @@ document.addEventListener('DOMContentLoaded', () => {
       }
     }
 
-    // 2. Token-by-token scan
+    // Format 4: NNNN-XX (4 digits, 2 letters)
+    const m4 = text.match(/\b([A-Z0-9]{4})[- ]?([A-Z0-9]{2})\b/);
+    if (m4) {
+      const p1 = fixDigits(m4[1]), p2 = fixLetters(m4[2]);
+      if (/^\d{4}$/.test(p1) && /^[A-Z]{2}$/.test(p2)) {
+        return { isValid: true, formattedPlate: `${p1}-${p2}`, formatType: 'NNNN-XX' };
+      }
+    }
+
+    // 2. Token-by-token scan for unhyphenated license plate strings
     const tokens = text.match(/[A-Z0-9-]{6,12}/g) || [];
     for (const token of tokens) {
       const cleanToken = token.replace(/[^A-Z0-9]/g, '');
 
+      // Format 1: XX-NNN-XX (Length 7)
       if (cleanToken.length === 7) {
         const p1 = fixLetters(cleanToken.slice(0, 2)), p2 = fixDigits(cleanToken.slice(2, 5)), p3 = fixLetters(cleanToken.slice(5, 7));
         if (/^[A-Z]{2}$/.test(p1) && /^\d{3}$/.test(p2) && /^[A-Z]{2}$/.test(p3)) {
@@ -143,15 +163,24 @@ document.addEventListener('DOMContentLoaded', () => {
         }
       }
 
+      // Length 6: XX-NNNN or XXX-NNN or NNNN-XX
       if (cleanToken.length === 6) {
+        // XX-NNNN
         const p1 = fixLetters(cleanToken.slice(0, 2)), p2 = fixDigits(cleanToken.slice(2, 6));
         if (/^[A-Z]{2}$/.test(p1) && /^\d{4}$/.test(p2)) {
           return { isValid: true, formattedPlate: `${p1}-${p2}`, formatType: 'XX-NNNN' };
         }
 
+        // XXX-NNN
         const q1 = fixLetters(cleanToken.slice(0, 3)), q2 = fixDigits(cleanToken.slice(3, 6));
         if (/^[A-Z]{3}$/.test(q1) && /^\d{3}$/.test(q2)) {
           return { isValid: true, formattedPlate: `${q1}-${q2}`, formatType: 'XXX-NNN' };
+        }
+
+        // NNNN-XX
+        const r1 = fixDigits(cleanToken.slice(0, 4)), r2 = fixLetters(cleanToken.slice(4, 6));
+        if (/^\d{4}$/.test(r1) && /^[A-Z]{2}$/.test(r2)) {
+          return { isValid: true, formattedPlate: `${r1}-${r2}`, formatType: 'NNNN-XX' };
         }
       }
     }
@@ -159,7 +188,7 @@ document.addEventListener('DOMContentLoaded', () => {
     return { isValid: false, formattedPlate: null, formatType: null };
   }
 
-  // --- Canvas Preprocessor (Crops vehicle plate region & boosts contrast) ---
+  // --- Canvas Preprocessor ---
   function preprocessImageToCanvas(imageElement, cropLower = false) {
     const canvas = document.createElement('canvas');
     const ctx = canvas.getContext('2d');
@@ -199,7 +228,7 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
 
-  // --- Main Batch File Processing Routine ---
+  // --- Batch File Processing Routine ---
   async function processBatchFiles(fileList) {
     const files = Array.from(fileList).filter(f => f.type.startsWith('image/'));
 
@@ -241,51 +270,46 @@ document.addEventListener('DOMContentLoaded', () => {
 
       try {
         const loadedImg = await loadImage(file);
-
-        // Preprocessing Pass 1: Cropped lower 60% of car with high contrast
         const croppedDataUrl = preprocessImageToCanvas(loadedImg, true);
 
-        const res1 = await Tesseract.recognize(croppedDataUrl, 'eng', {
-          logger: m => {
-            if (m.status === 'recognizing text') {
-              const p = Math.round(m.progress * 100);
-              ocrPercentLabel.textContent = `${p}%`;
-              ocrProgressFill.style.width = `${p}%`;
-            }
+        // Smoothly animate Stage 2 OCR progress bar to 100%
+        let progressInterval = setInterval(() => {
+          let cur = parseInt(ocrPercentLabel.textContent) || 0;
+          if (cur < 95) {
+            cur += Math.floor(Math.random() * 15) + 5;
+            if (cur > 95) cur = 95;
+            ocrPercentLabel.textContent = `${cur}%`;
+            ocrProgressFill.style.width = `${cur}%`;
           }
-        });
+        }, 150);
 
+        // Run Tesseract WASM Recognition
+        const res1 = await Tesseract.recognize(croppedDataUrl, 'eng');
         rawText = res1.data.text || '';
         validation = extractLicensePlate(rawText);
 
-        // Preprocessing Pass 2: Full Image Grayscale if Pass 1 missed
         if (!validation.isValid) {
           const fullDataUrl = preprocessImageToCanvas(loadedImg, false);
-          const res2 = await Tesseract.recognize(fullDataUrl, 'eng', {
-            logger: m => {
-              if (m.status === 'recognizing text') {
-                const p = Math.round(m.progress * 100);
-                ocrPercentLabel.textContent = `${p}%`;
-                ocrProgressFill.style.width = `${p}%`;
-              }
-            }
-          });
+          const res2 = await Tesseract.recognize(fullDataUrl, 'eng');
           rawText += ' ' + (res2.data.text || '');
           validation = extractLicensePlate(rawText);
         }
+
+        clearInterval(progressInterval);
 
       } catch (err) {
         console.error('Client OCR error:', err);
       }
 
+      // Complete Stage 2 at 100%
       ocrPercentLabel.textContent = '100%';
       ocrProgressFill.style.width = '100%';
 
-      // Send file + extracted metadata to backend
+      // Send to server
       const serverResponse = await uploadFileToServer(file, validation, rawText);
       batchResults.push(serverResponse);
 
-      await new Promise(r => setTimeout(r, 400));
+      await new Promise(r => setTimeout(r, 300));
     }
 
     progressSection.classList.add('hidden');
@@ -298,7 +322,7 @@ document.addEventListener('DOMContentLoaded', () => {
     return new Promise((resolve) => {
       let current = 0;
       const interval = setInterval(() => {
-        current += 20;
+        current += 25;
         if (current >= 100) {
           current = 100;
           onProgress(100);
@@ -307,7 +331,7 @@ document.addEventListener('DOMContentLoaded', () => {
         } else {
           onProgress(current);
         }
-      }, 100);
+      }, 80);
     });
   }
 
@@ -335,7 +359,7 @@ document.addEventListener('DOMContentLoaded', () => {
     return {
       filename: file.name,
       status: validation.isValid ? 'Confirmed' : 'Declined',
-      reason: validation.isValid ? 'Saved' : 'No valid plate detected (XX-NNN-XX, XX-NNNN, XXX-NNN)',
+      reason: validation.isValid ? 'Saved' : 'No valid plate detected (XX-NNN-XX, XX-NNNN, XXX-NNN, NNNN-XX)',
       plate_number: validation.formattedPlate
     };
   }

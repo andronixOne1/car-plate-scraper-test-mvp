@@ -8,7 +8,7 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="style.css">
-  <!-- Client-side Tesseract.js for fast WASM OCR with real-time progress -->
+  <!-- Client-side Tesseract.js for fast WASM OCR -->
   <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
 </head>
 <body>
@@ -33,7 +33,7 @@
       <section class="card upload-card">
         <div class="card-header">
           <h2><span class="icon">📸</span> Batch Upload Vehicle Photos</h2>
-          <p>Select up to 10 car photos simultaneously. Only valid plates matching <code>xx-nnn-xx</code>, <code>xx-nnnn</code>, or <code>xxx-nnn</code> will be confirmed and saved.</p>
+          <p>Select up to 10 car photos simultaneously. Allowed Formats: <code>xx-nnn-xx</code>, <code>xx-nnnn</code>, <code>xxx-nnn</code>, <code>nnnn-xx</code>.</p>
         </div>
 
         <!-- Persistent Drop Zone -->
@@ -48,7 +48,7 @@
               </svg>
             </div>
             <p class="drop-title">Drag & Drop car images here or click to choose (Max 10 files)</p>
-            <p class="drop-sub">Supported formats: XX-NNN-XX, XX-NNNN, XXX-NNN</p>
+            <p class="drop-sub">Supported formats: XX-NNN-XX, XX-NNNN, XXX-NNN, NNNN-XX</p>
           </div>
         </div>
 
@@ -130,7 +130,7 @@
               <circle cx="11" cy="11" r="8"></circle>
               <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
             </svg>
-            <input type="text" id="searchInput" placeholder="Search license plate (e.g. AB-123-CD)..." autocomplete="off">
+            <input type="text" id="searchInput" placeholder="Search license plate (e.g. AB-123-CD or 1234-AB)..." autocomplete="off">
             <button class="clear-btn hidden" id="clearSearchBtn">✕</button>
           </div>
           <button class="btn btn-primary" id="btnSearch">Search</button>
