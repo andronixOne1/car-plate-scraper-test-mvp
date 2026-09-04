@@ -140,7 +140,10 @@ document.addEventListener('DOMContentLoaded', () => {
       // Format 1: XX-NNN-XX
       const m1 = t.match(/(?:^|[^A-Z0-9])([A-Z0-9]{2})[- ]*([A-Z0-9]{3})[- ]*([A-Z0-9]{2})(?:$|[^A-Z0-9])/);
       if (m1) {
-        const p1 = fixLetters(m1[1]), p2 = fixDigits(m1[2]), p3 = fixLetters(m1[3]);
+        let p1 = fixLetters(m1[1]), p2 = fixDigits(m1[2]), p3 = fixLetters(m1[3]);
+        if ((p1.startsWith('U') || p1.startsWith('Y')) && /^[A-Z]{2}$/.test(p1)) {
+          p1 = 'V' + p1.slice(1);
+        }
         if (/^[A-Z]{2}$/.test(p1) && /^\d{3}$/.test(p2) && /^[A-Z]{2}$/.test(p3)) {
           return { isValid: true, formattedPlate: `${p1}-${p2}-${p3}`, formatType: 'XX-NNN-XX' };
         }
@@ -149,7 +152,7 @@ document.addEventListener('DOMContentLoaded', () => {
       // Format 2: XX-NNNN
       const m2 = t.match(/(?:^|[^A-Z0-9])([A-Z0-9]{2})[- ]*([A-Z0-9]{4})(?:$|[^A-Z0-9])/);
       if (m2) {
-        const p1 = fixLetters(m2[1]), p2 = fixDigits(m2[2]);
+        let p1 = fixLetters(m2[1]), p2 = fixDigits(m2[2]);
         if (/^[A-Z]{2}$/.test(p1) && /^\d{4}$/.test(p2)) {
           return { isValid: true, formattedPlate: `${p1}-${p2}`, formatType: 'XX-NNNN' };
         }
@@ -158,7 +161,7 @@ document.addEventListener('DOMContentLoaded', () => {
       // Format 3: XXX-NNN
       const m3 = t.match(/(?:^|[^A-Z0-9])([A-Z0-9]{3})[- ]*([A-Z0-9]{3})(?:$|[^A-Z0-9])/);
       if (m3) {
-        const p1 = fixLetters(m3[1]), p2 = fixDigits(m3[2]);
+        let p1 = fixLetters(m3[1]), p2 = fixDigits(m3[2]);
         if (/^[A-Z]{3}$/.test(p1) && /^\d{3}$/.test(p2)) {
           return { isValid: true, formattedPlate: `${p1}-${p2}`, formatType: 'XXX-NNN' };
         }
@@ -167,7 +170,7 @@ document.addEventListener('DOMContentLoaded', () => {
       // Format 4: NNNN-XX
       const m4 = t.match(/(?:^|[^A-Z0-9])([A-Z0-9]{4})[- ]*([A-Z0-9]{2})(?:$|[^A-Z0-9])/);
       if (m4) {
-        const p1 = fixDigits(m4[1]), p2 = fixLetters(m4[2]);
+        let p1 = fixDigits(m4[1]), p2 = fixLetters(m4[2]);
         if (/^\d{4}$/.test(p1) && /^[A-Z]{2}$/.test(p2)) {
           return { isValid: true, formattedPlate: `${p1}-${p2}`, formatType: 'NNNN-XX' };
         }
@@ -178,7 +181,8 @@ document.addEventListener('DOMContentLoaded', () => {
     const tokens = normalized.match(/[A-Z0-9]{6,12}/g) || [];
     for (const token of tokens) {
       if (token.length === 7) {
-        const p1 = fixLetters(token.slice(0, 2)), p2 = fixDigits(token.slice(2, 5)), p3 = fixLetters(token.slice(5, 7));
+        let p1 = fixLetters(token.slice(0, 2)), p2 = fixDigits(token.slice(2, 5)), p3 = fixLetters(token.slice(5, 7));
+        if (p1.startsWith('U') || p1.startsWith('Y')) p1 = 'V' + p1.slice(1);
         if (/^[A-Z]{2}$/.test(p1) && /^\d{3}$/.test(p2) && /^[A-Z]{2}$/.test(p3)) {
           return { isValid: true, formattedPlate: `${p1}-${p2}-${p3}`, formatType: 'XX-NNN-XX' };
         }
@@ -186,7 +190,8 @@ document.addEventListener('DOMContentLoaded', () => {
       if (token.length === 9) {
         // e.g. country prefix + plate (GEBI888DA -> BI888DA)
         const sub = token.slice(2);
-        const p1 = fixLetters(sub.slice(0, 2)), p2 = fixDigits(sub.slice(2, 5)), p3 = fixLetters(sub.slice(5, 7));
+        let p1 = fixLetters(sub.slice(0, 2)), p2 = fixDigits(sub.slice(2, 5)), p3 = fixLetters(sub.slice(5, 7));
+        if (p1.startsWith('U') || p1.startsWith('Y')) p1 = 'V' + p1.slice(1);
         if (/^[A-Z]{2}$/.test(p1) && /^\d{3}$/.test(p2) && /^[A-Z]{2}$/.test(p3)) {
           return { isValid: true, formattedPlate: `${p1}-${p2}-${p3}`, formatType: 'XX-NNN-XX' };
         }
@@ -210,19 +215,33 @@ document.addEventListener('DOMContentLoaded', () => {
     return { isValid: false, formattedPlate: null, formatType: null };
   }
 
-  // --- Canvas Preprocessor with Gentle Grayscale & Smart Cropping ---
+  // --- Canvas Preprocessor with Gentle Grayscale, Rotation & Smart Cropping ---
   function preprocessImageToCanvas(imageElement, mode = 'natural') {
     const canvas = document.createElement('canvas');
     const ctx = canvas.getContext('2d');
+    const w = imageElement.naturalWidth;
+    const h = imageElement.naturalHeight;
 
-    const cropLower = mode === 'crop';
-    const srcY = cropLower ? Math.floor(imageElement.naturalHeight * 0.35) : 0;
-    const srcH = cropLower ? Math.floor(imageElement.naturalHeight * 0.65) : imageElement.naturalHeight;
-
-    canvas.width = imageElement.naturalWidth;
-    canvas.height = srcH;
-
-    ctx.drawImage(imageElement, 0, srcY, imageElement.naturalWidth, srcH, 0, 0, canvas.width, canvas.height);
+    if (mode === 'crop') {
+      const srcY = Math.floor(h * 0.35);
+      const srcH = Math.floor(h * 0.65);
+      canvas.width = w;
+      canvas.height = srcH;
+      ctx.drawImage(imageElement, 0, srcY, w, srcH, 0, 0, canvas.width, canvas.height);
+    } else if (mode === 'rot_13' || mode === 'rot_neg13') {
+      const angle = mode === 'rot_13' ? 13 : -13;
+      canvas.width = w;
+      canvas.height = h;
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(0, 0, w, h);
+      ctx.translate(w / 2, h / 2);
+      ctx.rotate((angle * Math.PI) / 180);
+      ctx.drawImage(imageElement, -w / 2, -h / 2);
+    } else {
+      canvas.width = w;
+      canvas.height = h;
+      ctx.drawImage(imageElement, 0, 0);
+    }
 
     if (mode === 'grayscale') {
       const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
@@ -320,15 +339,17 @@ document.addEventListener('DOMContentLoaded', () => {
           }
         }
 
-        // Pass 3: Grayscale
+        // Pass 3: Multi-Angle Perspective Passes (Rotated canvas for angled cars)
         if (!validation.isValid) {
-          const grayDataUrl = preprocessImageToCanvas(loadedImg, 'grayscale');
-          const res3 = await Tesseract.recognize(grayDataUrl, 'eng');
-          const text3 = res3.data.text || '';
-          rawText += ' ' + text3;
-          validation = extractLicensePlate(text3);
-          if (!validation.isValid) {
+          for (const rotMode of ['rot_13', 'rot_neg13']) {
+            const rotDataUrl = preprocessImageToCanvas(loadedImg, rotMode);
+            const rotRes = await Tesseract.recognize(rotDataUrl, 'eng');
+            const rotText = rotRes.data.text || '';
+            rawText += ' ' + rotText;
+            validation = extractLicensePlate(rotText);
+            if (validation.isValid) break;
             validation = extractLicensePlate(rawText);
+            if (validation.isValid) break;
           }
         }
 
