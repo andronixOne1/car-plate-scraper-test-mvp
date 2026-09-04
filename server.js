@@ -18,7 +18,7 @@ app.use(express.static(path.join(__dirname, 'public')));
 // Multer memory storage for multiple uploads (up to 20 files at once)
 const upload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 10 * 1024 * 1024, files: 20 }, // 10MB per file, max 20 files
+  limits: { fileSize: 15 * 1024 * 1024, files: 20 }, // 15MB per file, max 20 files
   fileFilter: (req, file, cb) => {
     if (file.mimetype.startsWith('image/')) {
       cb(null, true);
@@ -80,93 +80,139 @@ const db = admin.apps.length ? admin.firestore() : null;
 const bucket = admin.apps.length && process.env.FIREBASE_STORAGE_BUCKET ? admin.storage().bucket() : null;
 
 /**
- * Strict License Plate Format Validation
- * Allowed Formats:
- * 1) "xx-nnn-xx" -> e.g. AB-123-CD (2 letters, 3 digits, 2 letters)
- * 2) "xx-nnnn"   -> e.g. AB-1234   (2 letters, 4 digits)
- * 3) "xxx-nnn"   -> e.g. ABC-123   (3 letters, 3 digits)
- * x = Latin letter (A-Z), n = Digit (0-9)
+ * Common OCR Character Repairs
  */
-function validateAndFormatPlate(rawText) {
+function fixLetters(str) {
+  return str
+    .replace(/0/g, 'O')
+    .replace(/1/g, 'I')
+    .replace(/2/g, 'Z')
+    .replace(/5/g, 'S')
+    .replace(/8/g, 'B');
+}
+
+function fixDigits(str) {
+  return str
+    .replace(/O/g, '0')
+    .replace(/Q/g, '0')
+    .replace(/I/g, '1')
+    .replace(/L/g, '1')
+    .replace(/Z/g, '2')
+    .replace(/S/g, '5')
+    .replace(/B/g, '8');
+}
+
+/**
+ * Robust License Plate Extraction & Format Validation
+ * Formats:
+ * 1) "XX-NNN-XX" -> 2 letters, 3 digits, 2 letters (e.g. AB-123-CD)
+ * 2) "XX-NNNN"   -> 2 letters, 4 digits (e.g. AB-1234)
+ * 3) "XXX-NNN"   -> 3 letters, 3 digits (e.g. ABC-123)
+ */
+function extractLicensePlates(rawText) {
   if (!rawText) return { isValid: false, formattedPlate: null, formatType: null };
 
-  const cleaned = rawText.toUpperCase().trim();
-  const strippedHyphen = cleaned.replace(/[^A-Z0-9-]/g, '');
-  const strippedAlphaNum = cleaned.replace(/[^A-Z0-9]/g, '');
+  const text = rawText.toUpperCase().replace(/[\r\n]+/g, ' ');
 
-  const pattern1 = /^[A-Z]{2}-\d{3}-[A-Z]{2}$/;
-  const pattern2 = /^[A-Z]{2}-\d{4}$/;
-  const pattern3 = /^[A-Z]{3}-\d{3}$/;
-
-  // Check exact hyphenated format
-  if (pattern1.test(strippedHyphen)) {
-    return { isValid: true, formattedPlate: strippedHyphen, formatType: 'XX-NNN-XX' };
-  }
-  if (pattern2.test(strippedHyphen)) {
-    return { isValid: true, formattedPlate: strippedHyphen, formatType: 'XX-NNNN' };
-  }
-  if (pattern3.test(strippedHyphen)) {
-    return { isValid: true, formattedPlate: strippedHyphen, formatType: 'XXX-NNN' };
-  }
-
-  // Check pure alphanumeric string and format automatically
-  if (/^[A-Z]{2}\d{3}[A-Z]{2}$/.test(strippedAlphaNum)) {
-    const formatted = `${strippedAlphaNum.slice(0,2)}-${strippedAlphaNum.slice(2,5)}-${strippedAlphaNum.slice(5,7)}`;
-    return { isValid: true, formattedPlate: formatted, formatType: 'XX-NNN-XX' };
-  }
-  if (/^[A-Z]{2}\d{4}$/.test(strippedAlphaNum)) {
-    const formatted = `${strippedAlphaNum.slice(0,2)}-${strippedAlphaNum.slice(2,6)}`;
-    return { isValid: true, formattedPlate: formatted, formatType: 'XX-NNNN' };
-  }
-  if (/^[A-Z]{3}\d{3}$/.test(strippedAlphaNum)) {
-    const formatted = `${strippedAlphaNum.slice(0,3)}-${strippedAlphaNum.slice(3,6)}`;
-    return { isValid: true, formattedPlate: formatted, formatType: 'XXX-NNN' };
-  }
-
-  // Regexp search within OCR text block
-  const match1 = cleaned.match(/\b([A-Z]{2})[- ]?(\d{3})[- ]?([A-Z]{2})\b/);
+  // 1. Direct Regex Search for hyphenated / space-separated formats
+  const match1 = text.match(/\b([A-Z0-9]{2})[- ]?(\d[A-Z0-9]{2})[- ]?([A-Z0-9]{2})\b/);
   if (match1) {
-    return { isValid: true, formattedPlate: `${match1[1]}-${match1[2]}-${match1[3]}`, formatType: 'XX-NNN-XX' };
+    const p1 = fixLetters(match1[1]);
+    const p2 = fixDigits(match1[2]);
+    const p3 = fixLetters(match1[3]);
+    if (/^[A-Z]{2}$/.test(p1) && /^\d{3}$/.test(p2) && /^[A-Z]{2}$/.test(p3)) {
+      return { isValid: true, formattedPlate: `${p1}-${p2}-${p3}`, formatType: 'XX-NNN-XX' };
+    }
   }
 
-  const match2 = cleaned.match(/\b([A-Z]{2})[- ]?(\d{4})\b/);
+  const match2 = text.match(/\b([A-Z0-9]{2})[- ]?([A-Z0-9]{4})\b/);
   if (match2) {
-    return { isValid: true, formattedPlate: `${match2[1]}-${match2[2]}`, formatType: 'XX-NNNN' };
+    const p1 = fixLetters(match2[1]);
+    const p2 = fixDigits(match2[2]);
+    if (/^[A-Z]{2}$/.test(p1) && /^\d{4}$/.test(p2)) {
+      return { isValid: true, formattedPlate: `${p1}-${p2}`, formatType: 'XX-NNNN' };
+    }
   }
 
-  const match3 = cleaned.match(/\b([A-Z]{3})[- ]?(\d{3})\b/);
+  const match3 = text.match(/\b([A-Z0-9]{3})[- ]?([A-Z0-9]{3})\b/);
   if (match3) {
-    return { isValid: true, formattedPlate: `${match3[1]}-${match3[2]}`, formatType: 'XXX-NNN' };
+    const p1 = fixLetters(match3[1]);
+    const p2 = fixDigits(match3[2]);
+    if (/^[A-Z]{3}$/.test(p1) && /^\d{3}$/.test(p2)) {
+      return { isValid: true, formattedPlate: `${p1}-${p2}`, formatType: 'XXX-NNN' };
+    }
+  }
+
+  // 2. Token-by-token scan for unhyphenated license plate strings
+  const tokens = text.match(/[A-Z0-9-]{6,12}/g) || [];
+  for (const token of tokens) {
+    const cleanToken = token.replace(/[^A-Z0-9]/g, '');
+
+    // Format 1: Length 7 (XX-NNN-XX)
+    if (cleanToken.length === 7) {
+      const p1 = fixLetters(cleanToken.slice(0, 2));
+      const p2 = fixDigits(cleanToken.slice(2, 5));
+      const p3 = fixLetters(cleanToken.slice(5, 7));
+      if (/^[A-Z]{2}$/.test(p1) && /^\d{3}$/.test(p2) && /^[A-Z]{2}$/.test(p3)) {
+        return { isValid: true, formattedPlate: `${p1}-${p2}-${p3}`, formatType: 'XX-NNN-XX' };
+      }
+    }
+
+    // Format 2 & 3: Length 6 (XX-NNNN or XXX-NNN)
+    if (cleanToken.length === 6) {
+      // XX-NNNN
+      const p1 = fixLetters(cleanToken.slice(0, 2));
+      const p2 = fixDigits(cleanToken.slice(2, 6));
+      if (/^[A-Z]{2}$/.test(p1) && /^\d{4}$/.test(p2)) {
+        return { isValid: true, formattedPlate: `${p1}-${p2}`, formatType: 'XX-NNNN' };
+      }
+
+      // XXX-NNN
+      const q1 = fixLetters(cleanToken.slice(0, 3));
+      const q2 = fixDigits(cleanToken.slice(3, 6));
+      if (/^[A-Z]{3}$/.test(q1) && /^\d{3}$/.test(q2)) {
+        return { isValid: true, formattedPlate: `${q1}-${q2}`, formatType: 'XXX-NNN' };
+      }
+    }
   }
 
   return { isValid: false, formattedPlate: null, formatType: null };
 }
 
 /**
- * Process a single image file through OCR and validation
+ * Process a single image file through Tesseract OCR
  */
 async function processSingleImage(file) {
   const fileName = file.originalname;
   try {
-    // OCR with Tesseract.js (Whitelisted chars for faster speed and accuracy)
+    // Run Tesseract OCR in sparse text mode (PSM 11) to find small text blocks on cars
     const ocrResult = await Tesseract.recognize(file.buffer, 'eng', {
-      tessedit_char_whitelist: 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-'
+      tessedit_pageseg_mode: '11'
     });
 
-    const rawText = ocrResult.data.text || '';
-    const validation = validateAndFormatPlate(rawText);
+    let rawText = ocrResult.data.text || '';
+    let validation = extractLicensePlates(rawText);
+
+    // Fallback: If PSM 11 didn't find it, try PSM 3 (automatic segmentation)
+    if (!validation.isValid) {
+      const fallbackResult = await Tesseract.recognize(file.buffer, 'eng', {
+        tessedit_pageseg_mode: '3'
+      });
+      rawText += ' ' + (fallbackResult.data.text || '');
+      validation = extractLicensePlates(rawText);
+    }
 
     if (!validation.isValid) {
       return {
         filename: fileName,
         status: 'Declined',
-        reason: 'Invalid format (Must be XX-NNN-XX, XX-NNNN, or XXX-NNN)',
+        reason: 'No valid license plate detected (Formats: XX-NNN-XX, XX-NNNN, XXX-NNN)',
         plate_number: null,
         raw_text: rawText.trim()
       };
     }
 
-    // Upload to Firebase Storage if confirmed
+    // Save image to Firebase Storage or Base64 URI
     let imageUrl = '';
     if (bucket) {
       const storagePath = `spotted_plates/${Date.now()}_${path.basename(fileName)}`;
@@ -182,7 +228,7 @@ async function processSingleImage(file) {
 
     const timestamp = new Date().toISOString();
 
-    // Save to Firestore
+    // Save document to Firestore spotted_plates
     let docId = 'temp-' + Date.now();
     if (db) {
       const docRef = await db.collection('spotted_plates').add({
@@ -212,7 +258,7 @@ async function processSingleImage(file) {
     return {
       filename: fileName,
       status: 'Declined',
-      reason: `OCR Error: ${error.message}`,
+      reason: `OCR Processing Error: ${error.message}`,
       plate_number: null
     };
   }
@@ -220,7 +266,6 @@ async function processSingleImage(file) {
 
 /**
  * POST /api/upload
- * Accept single or multiple file uploads
  */
 app.post('/api/upload', upload.array('images', 20), async (req, res) => {
   try {
@@ -230,7 +275,7 @@ app.post('/api/upload', upload.array('images', 20), async (req, res) => {
       return res.status(400).json({ error: 'No image files uploaded.' });
     }
 
-    console.log(`Processing batch upload of ${files.length} file(s)...`);
+    console.log(`Processing ${files.length} image(s)...`);
 
     // Process all images concurrently
     const results = await Promise.all(files.map(file => processSingleImage(file)));
@@ -248,13 +293,12 @@ app.post('/api/upload', upload.array('images', 20), async (req, res) => {
 
   } catch (error) {
     console.error('Error in /api/upload:', error);
-    return res.status(500).json({ error: 'Failed to process batch upload.', details: error.message });
+    return res.status(500).json({ error: 'Failed to process upload.', details: error.message });
   }
 });
 
 /**
  * GET /api/search/:plate
- * Query spotted_plates Firestore collection by plate_number
  */
 app.get('/api/search/:plate?', async (req, res) => {
   try {
@@ -307,7 +351,7 @@ app.get('/api/search/:plate?', async (req, res) => {
   }
 });
 
-// Health check route
+// Health check
 app.get('/api/health', (req, res) => {
   res.json({
     status: 'online',
@@ -319,5 +363,4 @@ app.get('/api/health', (req, res) => {
 
 app.listen(PORT, () => {
   console.log(`🚀 Server running on port ${PORT}`);
-  console.log(`🌐 Local URL: http://localhost:${PORT}`);
 });
