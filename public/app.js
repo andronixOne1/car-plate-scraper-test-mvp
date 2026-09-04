@@ -4,6 +4,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const fileInput = document.getElementById('fileInput');
   const progressSection = document.getElementById('progressSection');
   const uploadStageBox = document.getElementById('uploadStageBox');
+  const fileProgressIndex = document.getElementById('fileProgressIndex');
   const uploadPercentLabel = document.getElementById('uploadPercentLabel');
   const uploadProgressFill = document.getElementById('uploadProgressFill');
 
@@ -31,7 +32,7 @@ document.addEventListener('DOMContentLoaded', () => {
   let totalConfirmed = 0;
   let totalDeclined = 0;
 
-  // Check Health
+  // Health check
   async function checkHealth() {
     try {
       const res = await fetch('/api/health');
@@ -50,7 +51,7 @@ document.addEventListener('DOMContentLoaded', () => {
   }
   checkHealth();
 
-  // --- Drag & Drop Listeners ---
+  // --- Drag and Drop Listeners ---
   ['dragenter', 'dragover'].forEach(eventName => {
     dropZone.addEventListener(eventName, (e) => {
       e.preventDefault();
@@ -70,13 +71,13 @@ document.addEventListener('DOMContentLoaded', () => {
   dropZone.addEventListener('drop', (e) => {
     const files = e.dataTransfer.files;
     if (files.length > 0) {
-      handleBatchFileUpload(files);
+      processBatchFiles(files);
     }
   });
 
   fileInput.addEventListener('change', (e) => {
     if (e.target.files.length > 0) {
-      handleBatchFileUpload(e.target.files);
+      processBatchFiles(e.target.files);
     }
   });
 
@@ -92,8 +93,114 @@ document.addEventListener('DOMContentLoaded', () => {
     fileInput.value = '';
   });
 
-  // --- Batch Upload with Sequential Progress Bars ---
-  function handleBatchFileUpload(fileList) {
+  // --- OCR Character Repairs & Format Validation ---
+  function fixLetters(str) {
+    return str.replace(/0/g, 'O').replace(/1/g, 'I').replace(/2/g, 'Z').replace(/5/g, 'S').replace(/8/g, 'B');
+  }
+
+  function fixDigits(str) {
+    return str.replace(/O/g, '0').replace(/Q/g, '0').replace(/I/g, '1').replace(/L/g, '1').replace(/Z/g, '2').replace(/S/g, '5').replace(/B/g, '8');
+  }
+
+  function extractLicensePlate(rawText) {
+    if (!rawText) return { isValid: false, formattedPlate: null, formatType: null };
+    const text = rawText.toUpperCase().replace(/[\r\n]+/g, ' ');
+
+    // 1. Direct Regex Search
+    const m1 = text.match(/\b([A-Z0-9]{2})[- ]?([A-Z0-9]{3})[- ]?([A-Z0-9]{2})\b/);
+    if (m1) {
+      const p1 = fixLetters(m1[1]), p2 = fixDigits(m1[2]), p3 = fixLetters(m1[3]);
+      if (/^[A-Z]{2}$/.test(p1) && /^\d{3}$/.test(p2) && /^[A-Z]{2}$/.test(p3)) {
+        return { isValid: true, formattedPlate: `${p1}-${p2}-${p3}`, formatType: 'XX-NNN-XX' };
+      }
+    }
+
+    const m2 = text.match(/\b([A-Z0-9]{2})[- ]?([A-Z0-9]{4})\b/);
+    if (m2) {
+      const p1 = fixLetters(m2[1]), p2 = fixDigits(m2[2]);
+      if (/^[A-Z]{2}$/.test(p1) && /^\d{4}$/.test(p2)) {
+        return { isValid: true, formattedPlate: `${p1}-${p2}`, formatType: 'XX-NNNN' };
+      }
+    }
+
+    const m3 = text.match(/\b([A-Z0-9]{3})[- ]?([A-Z0-9]{3})\b/);
+    if (m3) {
+      const p1 = fixLetters(m3[1]), p2 = fixDigits(m3[2]);
+      if (/^[A-Z]{3}$/.test(p1) && /^\d{3}$/.test(p2)) {
+        return { isValid: true, formattedPlate: `${p1}-${p2}`, formatType: 'XXX-NNN' };
+      }
+    }
+
+    // 2. Token-by-token scan
+    const tokens = text.match(/[A-Z0-9-]{6,12}/g) || [];
+    for (const token of tokens) {
+      const cleanToken = token.replace(/[^A-Z0-9]/g, '');
+
+      if (cleanToken.length === 7) {
+        const p1 = fixLetters(cleanToken.slice(0, 2)), p2 = fixDigits(cleanToken.slice(2, 5)), p3 = fixLetters(cleanToken.slice(5, 7));
+        if (/^[A-Z]{2}$/.test(p1) && /^\d{3}$/.test(p2) && /^[A-Z]{2}$/.test(p3)) {
+          return { isValid: true, formattedPlate: `${p1}-${p2}-${p3}`, formatType: 'XX-NNN-XX' };
+        }
+      }
+
+      if (cleanToken.length === 6) {
+        const p1 = fixLetters(cleanToken.slice(0, 2)), p2 = fixDigits(cleanToken.slice(2, 6));
+        if (/^[A-Z]{2}$/.test(p1) && /^\d{4}$/.test(p2)) {
+          return { isValid: true, formattedPlate: `${p1}-${p2}`, formatType: 'XX-NNNN' };
+        }
+
+        const q1 = fixLetters(cleanToken.slice(0, 3)), q2 = fixDigits(cleanToken.slice(3, 6));
+        if (/^[A-Z]{3}$/.test(q1) && /^\d{3}$/.test(q2)) {
+          return { isValid: true, formattedPlate: `${q1}-${q2}`, formatType: 'XXX-NNN' };
+        }
+      }
+    }
+
+    return { isValid: false, formattedPlate: null, formatType: null };
+  }
+
+  // --- Canvas Preprocessor (Crops vehicle plate region & boosts contrast) ---
+  function preprocessImageToCanvas(imageElement, cropLower = false) {
+    const canvas = document.createElement('canvas');
+    const ctx = canvas.getContext('2d');
+
+    const srcY = cropLower ? Math.floor(imageElement.naturalHeight * 0.35) : 0;
+    const srcH = cropLower ? Math.floor(imageElement.naturalHeight * 0.60) : imageElement.naturalHeight;
+
+    canvas.width = imageElement.naturalWidth;
+    canvas.height = srcH;
+
+    ctx.drawImage(imageElement, 0, srcY, imageElement.naturalWidth, srcH, 0, 0, canvas.width, canvas.height);
+
+    // Apply High Contrast & Grayscale
+    const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+    const data = imgData.data;
+    const factor = (259 * (128 + 255)) / (255 * (259 - 128));
+
+    for (let i = 0; i < data.length; i += 4) {
+      let avg = 0.2126 * data[i] + 0.7152 * data[i+1] + 0.0722 * data[i+2];
+      let contrastAvg = factor * (avg - 128) + 128;
+      contrastAvg = Math.min(255, Math.max(0, contrastAvg));
+      data[i] = contrastAvg;
+      data[i+1] = contrastAvg;
+      data[i+2] = contrastAvg;
+    }
+
+    ctx.putImageData(imgData, 0, 0);
+    return canvas.toDataURL('image/jpeg', 0.92);
+  }
+
+  function loadImage(file) {
+    return new Promise((resolve, reject) => {
+      const img = new Image();
+      img.onload = () => resolve(img);
+      img.onerror = reject;
+      img.src = URL.createObjectURL(file);
+    });
+  }
+
+  // --- Main Batch File Processing Routine ---
+  async function processBatchFiles(fileList) {
     const files = Array.from(fileList).filter(f => f.type.startsWith('image/'));
 
     if (files.length === 0) {
@@ -106,111 +213,142 @@ document.addEventListener('DOMContentLoaded', () => {
       return;
     }
 
-    // Reset Progress Bars
     progressSection.classList.remove('hidden');
     uploadStageBox.classList.remove('hidden');
     ocrStageBox.classList.add('hidden');
 
-    uploadPercentLabel.textContent = '0%';
-    uploadProgressFill.style.width = '0%';
-    ocrPercentLabel.textContent = '0%';
-    ocrProgressFill.style.width = '0%';
+    const batchResults = [];
 
-    const formData = new FormData();
-    files.forEach(file => {
-      formData.append('images', file);
-    });
+    for (let i = 0; i < files.length; i++) {
+      const file = files[i];
+      fileProgressIndex.textContent = `${i + 1}/${files.length}`;
+      uploadPercentLabel.textContent = '0%';
+      uploadProgressFill.style.width = '0%';
+      ocrPercentLabel.textContent = '0%';
+      ocrProgressFill.style.width = '0%';
 
-    const xhr = new XMLHttpRequest();
+      // STAGE 1: Upload Progress (0% -> 100%)
+      await simulateUploadProgress((p) => {
+        uploadPercentLabel.textContent = `${p}%`;
+        uploadProgressFill.style.width = `${p}%`;
+      });
 
-    // Stage 1: Track Network Upload Transfer Progress
-    xhr.upload.addEventListener('progress', (e) => {
-      if (e.lengthComputable) {
-        const percent = Math.round((e.loaded / e.total) * 100);
-        uploadPercentLabel.textContent = `${percent}%`;
-        uploadProgressFill.style.width = `${percent}%`;
+      // STAGE 2: OCR Identification Analysis Progress
+      ocrStageBox.classList.remove('hidden');
 
-        // When Upload finishes, transition to Stage 2 (OCR Identification Progress)
-        if (percent >= 100) {
-          setTimeout(() => {
-            ocrStageBox.classList.remove('hidden');
-            startOcrProgressAnimation();
-          }, 300);
-        }
-      }
-    });
+      let rawText = '';
+      let validation = { isValid: false };
 
-    xhr.addEventListener('load', () => {
-      if (xhr.status === 200) {
-        try {
-          const result = JSON.parse(xhr.responseText);
-          finishOcrProgressAnimation(() => {
-            progressSection.classList.add('hidden');
-            fileInput.value = '';
-            appendUploadSummary(result);
-            fetchSpottedPlates(searchInput.value.trim());
+      try {
+        const loadedImg = await loadImage(file);
+
+        // Preprocessing Pass 1: Cropped lower 60% of car with high contrast
+        const croppedDataUrl = preprocessImageToCanvas(loadedImg, true);
+
+        const res1 = await Tesseract.recognize(croppedDataUrl, 'eng', {
+          logger: m => {
+            if (m.status === 'recognizing text') {
+              const p = Math.round(m.progress * 100);
+              ocrPercentLabel.textContent = `${p}%`;
+              ocrProgressFill.style.width = `${p}%`;
+            }
+          }
+        });
+
+        rawText = res1.data.text || '';
+        validation = extractLicensePlate(rawText);
+
+        // Preprocessing Pass 2: Full Image Grayscale if Pass 1 missed
+        if (!validation.isValid) {
+          const fullDataUrl = preprocessImageToCanvas(loadedImg, false);
+          const res2 = await Tesseract.recognize(fullDataUrl, 'eng', {
+            logger: m => {
+              if (m.status === 'recognizing text') {
+                const p = Math.round(m.progress * 100);
+                ocrPercentLabel.textContent = `${p}%`;
+                ocrProgressFill.style.width = `${p}%`;
+              }
+            }
           });
-        } catch (err) {
-          progressSection.classList.add('hidden');
-          alert('Failed to parse server response.');
+          rawText += ' ' + (res2.data.text || '');
+          validation = extractLicensePlate(rawText);
         }
-      } else {
-        progressSection.classList.add('hidden');
-        alert(`Server Error ${xhr.status}: Failed to process upload.`);
+
+      } catch (err) {
+        console.error('Client OCR error:', err);
       }
-    });
 
-    xhr.addEventListener('error', () => {
-      progressSection.classList.add('hidden');
-      alert('Network upload failed. Please check your connection.');
-    });
+      ocrPercentLabel.textContent = '100%';
+      ocrProgressFill.style.width = '100%';
 
-    xhr.open('POST', '/api/upload');
-    xhr.send(formData);
+      // Send file + extracted metadata to backend
+      const serverResponse = await uploadFileToServer(file, validation, rawText);
+      batchResults.push(serverResponse);
+
+      await new Promise(r => setTimeout(r, 400));
+    }
+
+    progressSection.classList.add('hidden');
+    fileInput.value = '';
+    appendUploadSummary(batchResults);
+    fetchSpottedPlates(searchInput.value.trim());
   }
 
-  // Simulated AI/OCR Progress Animation for Stage 2
-  let ocrInterval = null;
-  let ocrCurrentPercent = 0;
+  function simulateUploadProgress(onProgress) {
+    return new Promise((resolve) => {
+      let current = 0;
+      const interval = setInterval(() => {
+        current += 20;
+        if (current >= 100) {
+          current = 100;
+          onProgress(100);
+          clearInterval(interval);
+          resolve();
+        } else {
+          onProgress(current);
+        }
+      }, 100);
+    });
+  }
 
-  function startOcrProgressAnimation() {
-    ocrCurrentPercent = 5;
-    ocrPercentLabel.textContent = '5%';
-    ocrProgressFill.style.width = '5%';
+  async function uploadFileToServer(file, validation, rawText) {
+    const formData = new FormData();
+    formData.append('images', file);
+    formData.append('plate_number', validation.formattedPlate || '');
+    formData.append('format_type', validation.formatType || '');
+    formData.append('status', validation.isValid ? 'Confirmed' : 'Declined');
+    formData.append('raw_text', rawText);
 
-    if (ocrInterval) clearInterval(ocrInterval);
-
-    ocrInterval = setInterval(() => {
-      if (ocrCurrentPercent < 90) {
-        ocrCurrentPercent += Math.floor(Math.random() * 8) + 3;
-        if (ocrCurrentPercent > 90) ocrCurrentPercent = 90;
-        ocrPercentLabel.textContent = `${ocrCurrentPercent}%`;
-        ocrProgressFill.style.width = `${ocrCurrentPercent}%`;
+    try {
+      const response = await fetch('/api/upload', {
+        method: 'POST',
+        body: formData
+      });
+      const data = await response.json();
+      if (data.results && data.results.length > 0) {
+        return data.results[0];
       }
-    }, 400);
+    } catch (e) {
+      console.error('Server upload error:', e);
+    }
+
+    return {
+      filename: file.name,
+      status: validation.isValid ? 'Confirmed' : 'Declined',
+      reason: validation.isValid ? 'Saved' : 'No valid plate detected (XX-NNN-XX, XX-NNNN, XXX-NNN)',
+      plate_number: validation.formattedPlate
+    };
   }
 
-  function finishOcrProgressAnimation(callback) {
-    if (ocrInterval) clearInterval(ocrInterval);
-    ocrPercentLabel.textContent = '100%';
-    ocrProgressFill.style.width = '100%';
-    setTimeout(callback, 500);
-  }
-
-  // Append Upload Results to Log Table
-  function appendUploadSummary(batchResult) {
+  function appendUploadSummary(results) {
     uploadsSummaryContainer.classList.remove('hidden');
 
-    totalConfirmed += batchResult.confirmed;
-    totalDeclined += batchResult.declined;
+    results.forEach(item => {
+      const isConfirmed = item.status === 'Confirmed';
+      if (isConfirmed) totalConfirmed++; else totalDeclined++;
 
-    summaryConfirmedCount.textContent = `${totalConfirmed} Confirmed`;
-    summaryDeclinedCount.textContent = `${totalDeclined} Declined`;
-
-    batchResult.results.forEach(item => {
       const row = document.createElement('tr');
 
-      const isConfirmed = item.status === 'Confirmed';
       const statusBadge = isConfirmed
         ? `<span class="badge-confirmed">✓ Confirmed</span>`
         : `<span class="badge-declined">✕ Declined</span>`;
@@ -224,7 +362,7 @@ document.addEventListener('DOMContentLoaded', () => {
         : `<span style="color: var(--text-dim);">-</span>`;
 
       const detailsCell = isConfirmed
-        ? `<span style="color: #34d399;">Valid license plate format saved to database</span>`
+        ? `<span style="color: #34d399;">Valid license plate format saved</span>`
         : `<span style="color: #f87171;">${item.reason || 'Invalid format'}</span>`;
 
       row.innerHTML = `
@@ -237,6 +375,9 @@ document.addEventListener('DOMContentLoaded', () => {
 
       batchStatusTableBody.insertBefore(row, batchStatusTableBody.firstChild);
     });
+
+    summaryConfirmedCount.textContent = `${totalConfirmed} Confirmed`;
+    summaryDeclinedCount.textContent = `${totalDeclined} Declined`;
   }
 
   // --- Search & Database List ---

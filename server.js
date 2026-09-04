@@ -1,9 +1,7 @@
 const express = require('express');
 const cors = require('cors');
 const multer = require('multer');
-const Tesseract = require('tesseract.js');
 const admin = require('firebase-admin');
-const Jimp = require('jimp');
 const path = require('path');
 const fs = require('fs');
 require('dotenv').config();
@@ -16,7 +14,7 @@ app.use(cors());
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 
-// Multer memory storage (Strict limit: MAX 10 files per simultaneous upload)
+// Multer memory storage (Strict limit: MAX 10 files)
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 15 * 1024 * 1024, files: 10 },
@@ -81,226 +79,6 @@ const db = admin.apps.length ? admin.firestore() : null;
 const bucket = admin.apps.length && process.env.FIREBASE_STORAGE_BUCKET ? admin.storage().bucket() : null;
 
 /**
- * OCR Character Positional Repair
- */
-function fixLetters(str) {
-  return str
-    .replace(/0/g, 'O')
-    .replace(/1/g, 'I')
-    .replace(/2/g, 'Z')
-    .replace(/5/g, 'S')
-    .replace(/8/g, 'B');
-}
-
-function fixDigits(str) {
-  return str
-    .replace(/O/g, '0')
-    .replace(/Q/g, '0')
-    .replace(/I/g, '1')
-    .replace(/L/g, '1')
-    .replace(/Z/g, '2')
-    .replace(/S/g, '5')
-    .replace(/B/g, '8');
-}
-
-/**
- * Flexible License Plate Extraction
- * Formats:
- * 1) XX-NNN-XX (e.g. AB-123-CD)
- * 2) XX-NNNN   (e.g. AB-1234)
- * 3) XXX-NNN   (e.g. ABC-123)
- */
-function extractLicensePlates(rawText) {
-  if (!rawText) return { isValid: false, formattedPlate: null, formatType: null };
-
-  const text = rawText.toUpperCase().replace(/[\r\n]+/g, ' ');
-
-  // 1. Direct Regex Search
-  const match1 = text.match(/\b([A-Z0-9]{2})[- ]?([A-Z0-9]{3})[- ]?([A-Z0-9]{2})\b/);
-  if (match1) {
-    const p1 = fixLetters(match1[1]);
-    const p2 = fixDigits(match1[2]);
-    const p3 = fixLetters(match1[3]);
-    if (/^[A-Z]{2}$/.test(p1) && /^\d{3}$/.test(p2) && /^[A-Z]{2}$/.test(p3)) {
-      return { isValid: true, formattedPlate: `${p1}-${p2}-${p3}`, formatType: 'XX-NNN-XX' };
-    }
-  }
-
-  const match2 = text.match(/\b([A-Z0-9]{2})[- ]?([A-Z0-9]{4})\b/);
-  if (match2) {
-    const p1 = fixLetters(match2[1]);
-    const p2 = fixDigits(match2[2]);
-    if (/^[A-Z]{2}$/.test(p1) && /^\d{4}$/.test(p2)) {
-      return { isValid: true, formattedPlate: `${p1}-${p2}`, formatType: 'XX-NNNN' };
-    }
-  }
-
-  const match3 = text.match(/\b([A-Z0-9]{3})[- ]?([A-Z0-9]{3})\b/);
-  if (match3) {
-    const p1 = fixLetters(match3[1]);
-    const p2 = fixDigits(match3[2]);
-    if (/^[A-Z]{3}$/.test(p1) && /^\d{3}$/.test(p2)) {
-      return { isValid: true, formattedPlate: `${p1}-${p2}`, formatType: 'XXX-NNN' };
-    }
-  }
-
-  // 2. Token-by-token scan
-  const tokens = text.match(/[A-Z0-9-]{6,12}/g) || [];
-  for (const token of tokens) {
-    const cleanToken = token.replace(/[^A-Z0-9]/g, '');
-
-    // Format 1: XX-NNN-XX (Length 7)
-    if (cleanToken.length === 7) {
-      const p1 = fixLetters(cleanToken.slice(0, 2));
-      const p2 = fixDigits(cleanToken.slice(2, 5));
-      const p3 = fixLetters(cleanToken.slice(5, 7));
-      if (/^[A-Z]{2}$/.test(p1) && /^\d{3}$/.test(p2) && /^[A-Z]{2}$/.test(p3)) {
-        return { isValid: true, formattedPlate: `${p1}-${p2}-${p3}`, formatType: 'XX-NNN-XX' };
-      }
-    }
-
-    // Format 2 & 3: Length 6
-    if (cleanToken.length === 6) {
-      // XX-NNNN
-      const p1 = fixLetters(cleanToken.slice(0, 2));
-      const p2 = fixDigits(cleanToken.slice(2, 6));
-      if (/^[A-Z]{2}$/.test(p1) && /^\d{4}$/.test(p2)) {
-        return { isValid: true, formattedPlate: `${p1}-${p2}`, formatType: 'XX-NNNN' };
-      }
-
-      // XXX-NNN
-      const q1 = fixLetters(cleanToken.slice(0, 3));
-      const q2 = fixDigits(cleanToken.slice(3, 6));
-      if (/^[A-Z]{3}$/.test(q1) && /^\d{3}$/.test(q2)) {
-        return { isValid: true, formattedPlate: `${q1}-${q2}`, formatType: 'XXX-NNN' };
-      }
-    }
-  }
-
-  return { isValid: false, formattedPlate: null, formatType: null };
-}
-
-/**
- * Image Preprocessing Pass with Jimp
- * Enhances contrast, converts to grayscale, and crops central/lower vehicle region
- */
-async function preprocessImageBuffers(imageBuffer) {
-  const buffers = [imageBuffer];
-
-  try {
-    const jimpImage = await Jimp.read(imageBuffer);
-    const width = jimpImage.getWidth();
-    const height = jimpImage.getHeight();
-
-    // Pass A: High contrast + Grayscale on full image
-    const enhancedFull = jimpImage.clone().greyscale().contrast(0.6).normalize();
-    buffers.push(await enhancedFull.getBufferAsync(Jimp.MIME_JPEG));
-
-    // Pass B: Crop lower 60% of car where plates are located
-    const cropY = Math.floor(height * 0.35);
-    const cropH = Math.floor(height * 0.60);
-    const croppedLower = jimpImage.clone().crop(0, cropY, width, cropH).greyscale().contrast(0.8).normalize();
-    buffers.push(await croppedLower.getBufferAsync(Jimp.MIME_JPEG));
-
-  } catch (err) {
-    console.warn('Image preprocessing warning:', err.message);
-  }
-
-  return buffers;
-}
-
-/**
- * Process a single image through multi-crop & multi-pass Tesseract OCR
- */
-async function processSingleImage(file) {
-  const fileName = file.originalname;
-  let allRawText = '';
-
-  try {
-    const imageBuffers = await preprocessImageBuffers(file.buffer);
-
-    // Run OCR across original and preprocessed cropped variants
-    for (const buf of imageBuffers) {
-      // Try PSM 11 (Sparse text)
-      const res11 = await Tesseract.recognize(buf, 'eng', { tessedit_pageseg_mode: '11' });
-      allRawText += ' ' + (res11.data.text || '');
-
-      let val = extractLicensePlates(allRawText);
-      if (val.isValid) {
-        return await saveConfirmedPlate(file, fileName, val, allRawText);
-      }
-
-      // Try PSM 3 (Automatic segmentation)
-      const res3 = await Tesseract.recognize(buf, 'eng', { tessedit_pageseg_mode: '3' });
-      allRawText += ' ' + (res3.data.text || '');
-
-      val = extractLicensePlates(allRawText);
-      if (val.isValid) {
-        return await saveConfirmedPlate(file, fileName, val, allRawText);
-      }
-    }
-
-    return {
-      filename: fileName,
-      status: 'Declined',
-      reason: 'No valid license plate detected (Formats: XX-NNN-XX, XX-NNNN, XXX-NNN)',
-      plate_number: null,
-      raw_text: allRawText.trim()
-    };
-
-  } catch (error) {
-    return {
-      filename: fileName,
-      status: 'Declined',
-      reason: `OCR Error: ${error.message}`,
-      plate_number: null
-    };
-  }
-}
-
-async function saveConfirmedPlate(file, fileName, validation, rawText) {
-  let imageUrl = '';
-  if (bucket) {
-    const storagePath = `spotted_plates/${Date.now()}_${path.basename(fileName)}`;
-    const fileRef = bucket.file(storagePath);
-    await fileRef.save(file.buffer, {
-      metadata: { contentType: file.mimetype },
-      public: true
-    });
-    imageUrl = `https://storage.googleapis.com/${bucket.name}/${storagePath}`;
-  } else {
-    imageUrl = `data:${file.mimetype};base64,${file.buffer.toString('base64')}`;
-  }
-
-  const timestamp = new Date().toISOString();
-
-  let docId = 'temp-' + Date.now();
-  if (db) {
-    const docRef = await db.collection('spotted_plates').add({
-      plate_number: validation.formattedPlate,
-      format_type: validation.formatType,
-      raw_text: rawText.trim(),
-      image_url: imageUrl,
-      status: 'Confirmed',
-      created_at: timestamp,
-      timestamp: admin.firestore.FieldValue.serverTimestamp()
-    });
-    docId = docRef.id;
-  }
-
-  return {
-    filename: fileName,
-    status: 'Confirmed',
-    id: docId,
-    plate_number: validation.formattedPlate,
-    format_type: validation.formatType,
-    raw_text: rawText.trim(),
-    image_url: imageUrl,
-    timestamp: timestamp
-  };
-}
-
-/**
  * POST /api/upload
  */
 app.post('/api/upload', upload.array('images', 10), async (req, res) => {
@@ -311,13 +89,69 @@ app.post('/api/upload', upload.array('images', 10), async (req, res) => {
       return res.status(400).json({ error: 'No image files uploaded.' });
     }
 
-    if (files.length > 10) {
-      return res.status(400).json({ error: 'Maximum limit is 10 files per upload.' });
+    const plateNumber = req.body.plate_number || null;
+    const formatType = req.body.format_type || null;
+    const isConfirmed = req.body.status === 'Confirmed' && plateNumber;
+    const rawText = req.body.raw_text || '';
+
+    const results = [];
+
+    for (const file of files) {
+      const fileName = file.originalname;
+
+      if (!isConfirmed) {
+        results.push({
+          filename: fileName,
+          status: 'Declined',
+          reason: 'No valid license plate detected (Formats: XX-NNN-XX, XX-NNNN, XXX-NNN)',
+          plate_number: null,
+          raw_text: rawText
+        });
+        continue;
+      }
+
+      // Upload to Firebase Storage or Base64 URI
+      let imageUrl = '';
+      if (bucket) {
+        const storagePath = `spotted_plates/${Date.now()}_${path.basename(fileName)}`;
+        const fileRef = bucket.file(storagePath);
+        await fileRef.save(file.buffer, {
+          metadata: { contentType: file.mimetype },
+          public: true
+        });
+        imageUrl = `https://storage.googleapis.com/${bucket.name}/${storagePath}`;
+      } else {
+        imageUrl = `data:${file.mimetype};base64,${file.buffer.toString('base64')}`;
+      }
+
+      const timestamp = new Date().toISOString();
+
+      // Save to Firestore
+      let docId = 'temp-' + Date.now();
+      if (db) {
+        const docRef = await db.collection('spotted_plates').add({
+          plate_number: plateNumber,
+          format_type: formatType,
+          raw_text: rawText,
+          image_url: imageUrl,
+          status: 'Confirmed',
+          created_at: timestamp,
+          timestamp: admin.firestore.FieldValue.serverTimestamp()
+        });
+        docId = docRef.id;
+      }
+
+      results.push({
+        filename: fileName,
+        status: 'Confirmed',
+        id: docId,
+        plate_number: plateNumber,
+        format_type: formatType,
+        raw_text: rawText,
+        image_url: imageUrl,
+        timestamp: timestamp
+      });
     }
-
-    console.log(`Processing ${files.length} image(s) with preprocessed cropping...`);
-
-    const results = await Promise.all(files.map(file => processSingleImage(file)));
 
     const confirmedCount = results.filter(r => r.status === 'Confirmed').length;
     const declinedCount = results.filter(r => r.status === 'Declined').length;
