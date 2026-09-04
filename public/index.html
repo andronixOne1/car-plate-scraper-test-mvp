@@ -31,7 +31,7 @@
       <section class="card upload-card">
         <div class="card-header">
           <h2><span class="icon">📸</span> Batch Upload Vehicle Photos</h2>
-          <p>Select or drop car photos anytime. Only valid license plates matching <code>xx-nnn-xx</code>, <code>xx-nnnn</code>, or <code>xxx-nnn</code> will be confirmed and saved.</p>
+          <p>Select up to 10 car photos simultaneously. Only valid plates matching <code>xx-nnn-xx</code>, <code>xx-nnnn</code>, or <code>xxx-nnn</code> will be confirmed and saved.</p>
         </div>
 
         <!-- Persistent Drop Zone -->
@@ -45,16 +45,34 @@
                 <line x1="12" y1="3" x2="12" y2="15"></line>
               </svg>
             </div>
-            <p class="drop-title">Drag & Drop car images here or click to choose multiple files</p>
-            <p class="drop-sub">You can upload as many times as you like!</p>
-            <span class="file-types-tag">Supported formats: XX-NNN-XX, XX-NNNN, XXX-NNN</span>
+            <p class="drop-title">Drag & Drop car images here or click to choose (Max 10 files)</p>
+            <p class="drop-sub">Supported formats: XX-NNN-XX, XX-NNNN, XXX-NNN</p>
           </div>
         </div>
 
-        <!-- Processing Indicator -->
-        <div class="processing-bar-wrapper hidden" id="processingBar">
-          <div class="spinner"></div>
-          <span id="processingText">Processing images through License Plate OCR...</span>
+        <!-- Dual Progress Bars Container -->
+        <div class="progress-section hidden" id="progressSection">
+          <!-- Stage 1: File Upload Network Transfer Progress Bar -->
+          <div class="progress-box" id="uploadStageBox">
+            <div class="progress-header">
+              <span class="stage-title">STAGE 1: IMAGE UPLOAD NETWORK TRANSFER</span>
+              <span class="percent-label" id="uploadPercentLabel">0%</span>
+            </div>
+            <div class="progress-track">
+              <div class="progress-fill upload-fill" id="uploadProgressFill"></div>
+            </div>
+          </div>
+
+          <!-- Stage 2: License Plate Identification AI Progress Bar -->
+          <div class="progress-box hidden" id="ocrStageBox">
+            <div class="progress-header">
+              <span class="stage-title">STAGE 2: LICENSE PLATE IDENTIFICATION & OCR ANALYSIS</span>
+              <span class="percent-label" id="ocrPercentLabel">0%</span>
+            </div>
+            <div class="progress-track">
+              <div class="progress-fill ocr-fill" id="ocrProgressFill"></div>
+            </div>
+          </div>
         </div>
 
         <!-- Batch Results Status Table (No Thumbnails) -->

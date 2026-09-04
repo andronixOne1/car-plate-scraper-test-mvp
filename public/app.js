@@ -2,8 +2,15 @@ document.addEventListener('DOMContentLoaded', () => {
   // DOM Elements
   const dropZone = document.getElementById('dropZone');
   const fileInput = document.getElementById('fileInput');
-  const processingBar = document.getElementById('processingBar');
-  const processingText = document.getElementById('processingText');
+  const progressSection = document.getElementById('progressSection');
+  const uploadStageBox = document.getElementById('uploadStageBox');
+  const uploadPercentLabel = document.getElementById('uploadPercentLabel');
+  const uploadProgressFill = document.getElementById('uploadProgressFill');
+
+  const ocrStageBox = document.getElementById('ocrStageBox');
+  const ocrPercentLabel = document.getElementById('ocrPercentLabel');
+  const ocrProgressFill = document.getElementById('ocrProgressFill');
+
   const uploadsSummaryContainer = document.getElementById('uploadsSummaryContainer');
   const batchStatusTableBody = document.getElementById('batchStatusTableBody');
   const summaryConfirmedCount = document.getElementById('summaryConfirmedCount');
@@ -21,11 +28,10 @@ document.addEventListener('DOMContentLoaded', () => {
   const statusIndicator = document.getElementById('statusIndicator');
   const statusText = document.getElementById('statusText');
 
-  let accumulatedResults = [];
   let totalConfirmed = 0;
   let totalDeclined = 0;
 
-  // Check System Health
+  // Check Health
   async function checkHealth() {
     try {
       const res = await fetch('/api/health');
@@ -44,7 +50,7 @@ document.addEventListener('DOMContentLoaded', () => {
   }
   checkHealth();
 
-  // --- Drag and Drop File Handlers ---
+  // --- Drag & Drop Listeners ---
   ['dragenter', 'dragover'].forEach(eventName => {
     dropZone.addEventListener(eventName, (e) => {
       e.preventDefault();
@@ -79,7 +85,6 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 
   btnClearLog.addEventListener('click', () => {
-    accumulatedResults = [];
     totalConfirmed = 0;
     totalDeclined = 0;
     batchStatusTableBody.innerHTML = '';
@@ -87,48 +92,109 @@ document.addEventListener('DOMContentLoaded', () => {
     fileInput.value = '';
   });
 
-  // --- Batch File Upload Processing ---
-  async function handleBatchFileUpload(fileList) {
+  // --- Batch Upload with Sequential Progress Bars ---
+  function handleBatchFileUpload(fileList) {
     const files = Array.from(fileList).filter(f => f.type.startsWith('image/'));
 
     if (files.length === 0) {
-      alert('Please upload valid image files (PNG, JPG, etc.).');
+      alert('Please select valid image files.');
       return;
     }
 
-    // Update UI State
-    processingBar.classList.remove('hidden');
-    processingText.textContent = `Analyzing ${files.length} image(s) for valid license plates...`;
+    if (files.length > 10) {
+      alert('Maximum limit is 10 simultaneous image uploads per batch.');
+      return;
+    }
+
+    // Reset Progress Bars
+    progressSection.classList.remove('hidden');
+    uploadStageBox.classList.remove('hidden');
+    ocrStageBox.classList.add('hidden');
+
+    uploadPercentLabel.textContent = '0%';
+    uploadProgressFill.style.width = '0%';
+    ocrPercentLabel.textContent = '0%';
+    ocrProgressFill.style.width = '0%';
 
     const formData = new FormData();
     files.forEach(file => {
       formData.append('images', file);
     });
 
-    try {
-      const response = await fetch('/api/upload', {
-        method: 'POST',
-        body: formData
-      });
+    const xhr = new XMLHttpRequest();
 
-      const result = await response.json();
+    // Stage 1: Track Network Upload Transfer Progress
+    xhr.upload.addEventListener('progress', (e) => {
+      if (e.lengthComputable) {
+        const percent = Math.round((e.loaded / e.total) * 100);
+        uploadPercentLabel.textContent = `${percent}%`;
+        uploadProgressFill.style.width = `${percent}%`;
 
-      processingBar.classList.add('hidden');
-      fileInput.value = ''; // Reset file input so user can re-upload same file if needed
-
-      if (response.ok && result.success) {
-        appendUploadSummary(result);
-        // Refresh confirmed records database list
-        fetchSpottedPlates(searchInput.value.trim());
-      } else {
-        throw new Error(result.error || 'Failed to process batch upload.');
+        // When Upload finishes, transition to Stage 2 (OCR Identification Progress)
+        if (percent >= 100) {
+          setTimeout(() => {
+            ocrStageBox.classList.remove('hidden');
+            startOcrProgressAnimation();
+          }, 300);
+        }
       }
+    });
 
-    } catch (error) {
-      console.error('Batch Upload Error:', error);
-      processingBar.classList.add('hidden');
-      alert(`Upload Error: ${error.message}`);
-    }
+    xhr.addEventListener('load', () => {
+      if (xhr.status === 200) {
+        try {
+          const result = JSON.parse(xhr.responseText);
+          finishOcrProgressAnimation(() => {
+            progressSection.classList.add('hidden');
+            fileInput.value = '';
+            appendUploadSummary(result);
+            fetchSpottedPlates(searchInput.value.trim());
+          });
+        } catch (err) {
+          progressSection.classList.add('hidden');
+          alert('Failed to parse server response.');
+        }
+      } else {
+        progressSection.classList.add('hidden');
+        alert(`Server Error ${xhr.status}: Failed to process upload.`);
+      }
+    });
+
+    xhr.addEventListener('error', () => {
+      progressSection.classList.add('hidden');
+      alert('Network upload failed. Please check your connection.');
+    });
+
+    xhr.open('POST', '/api/upload');
+    xhr.send(formData);
+  }
+
+  // Simulated AI/OCR Progress Animation for Stage 2
+  let ocrInterval = null;
+  let ocrCurrentPercent = 0;
+
+  function startOcrProgressAnimation() {
+    ocrCurrentPercent = 5;
+    ocrPercentLabel.textContent = '5%';
+    ocrProgressFill.style.width = '5%';
+
+    if (ocrInterval) clearInterval(ocrInterval);
+
+    ocrInterval = setInterval(() => {
+      if (ocrCurrentPercent < 90) {
+        ocrCurrentPercent += Math.floor(Math.random() * 8) + 3;
+        if (ocrCurrentPercent > 90) ocrCurrentPercent = 90;
+        ocrPercentLabel.textContent = `${ocrCurrentPercent}%`;
+        ocrProgressFill.style.width = `${ocrCurrentPercent}%`;
+      }
+    }, 400);
+  }
+
+  function finishOcrProgressAnimation(callback) {
+    if (ocrInterval) clearInterval(ocrInterval);
+    ocrPercentLabel.textContent = '100%';
+    ocrProgressFill.style.width = '100%';
+    setTimeout(callback, 500);
   }
 
   // Append Upload Results to Log Table
@@ -142,8 +208,6 @@ document.addEventListener('DOMContentLoaded', () => {
     summaryDeclinedCount.textContent = `${totalDeclined} Declined`;
 
     batchResult.results.forEach(item => {
-      accumulatedResults.unshift(item); // prepend latest
-
       const row = document.createElement('tr');
 
       const isConfirmed = item.status === 'Confirmed';
@@ -160,7 +224,7 @@ document.addEventListener('DOMContentLoaded', () => {
         : `<span style="color: var(--text-dim);">-</span>`;
 
       const detailsCell = isConfirmed
-        ? `<span style="color: #34d399;">Valid plate format saved to database</span>`
+        ? `<span style="color: #34d399;">Valid license plate format saved to database</span>`
         : `<span style="color: #f87171;">${item.reason || 'Invalid format'}</span>`;
 
       row.innerHTML = `
@@ -171,12 +235,11 @@ document.addEventListener('DOMContentLoaded', () => {
         <td>${detailsCell}</td>
       `;
 
-      // Insert at top of status table
       batchStatusTableBody.insertBefore(row, batchStatusTableBody.firstChild);
     });
   }
 
-  // --- Search & Confirmed Records Database List ---
+  // --- Search & Database List ---
   async function fetchSpottedPlates(query = '') {
     try {
       recordsTableBody.innerHTML = '<tr><td colspan="4" style="text-align: center; color: var(--text-muted); padding: 1.5rem;">Loading records...</td></tr>';
