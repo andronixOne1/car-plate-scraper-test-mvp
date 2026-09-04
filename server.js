@@ -117,17 +117,23 @@ app.post('/api/upload', upload.array('images', 10), async (req, res) => {
         continue;
       }
 
-      // Upload to Firebase Storage or Base64 URI
+      // Optional Image Storage (Firebase Storage if enabled, otherwise safe metadata-only or compact)
       let imageUrl = '';
-      if (bucket) {
-        const storagePath = `spotted_plates/${Date.now()}_${path.basename(fileName)}`;
-        const fileRef = bucket.file(storagePath);
-        await fileRef.save(file.buffer, {
-          metadata: { contentType: file.mimetype },
-          public: true
-        });
-        imageUrl = `https://storage.googleapis.com/${bucket.name}/${storagePath}`;
-      } else {
+      if (bucket && process.env.FIREBASE_STORAGE_BUCKET) {
+        try {
+          const storagePath = `spotted_plates/${Date.now()}_${path.basename(fileName)}`;
+          const fileRef = bucket.file(storagePath);
+          await fileRef.save(file.buffer, {
+            metadata: { contentType: file.mimetype },
+            public: true
+          });
+          imageUrl = `https://storage.googleapis.com/${bucket.name}/${storagePath}`;
+        } catch (storageErr) {
+          console.warn('⚠️ Cloud Storage upload skipped/failed:', storageErr.message);
+          imageUrl = '';
+        }
+      } else if (file.buffer && file.buffer.length < 300 * 1024) {
+        // Only embed base64 if image is under 300KB to respect Firestore 1MB document limit
         imageUrl = `data:${file.mimetype};base64,${file.buffer.toString('base64')}`;
       }
 
