@@ -1,0 +1,17 @@
+services:
+  - type: web
+    name: car-plate-scraper
+    env: node
+    region: ohio
+    plan: free
+    buildCommand: npm install
+    startCommand: npm start
+    envVars:
+      - key: PORT
+        value: 10000
+      - key: FIREBASE_STORAGE_BUCKET
+        sync: false
+      - key: FIREBASE_SERVICE_ACCOUNT
+        sync: false
+      - key: GOOGLE_APPLICATION_CREDENTIALS
+        sync: false

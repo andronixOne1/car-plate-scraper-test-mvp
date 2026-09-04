@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>PlateVision AI - License Plate Recognition & Search</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="app-wrapper">
+    <!-- Navigation Bar -->
+    <header class="navbar">
+      <div class="logo-container">
+        <div class="logo-icon">🚗</div>
+        <div>
+          <h1>PlateVision <span class="badge-ai">AI</span></h1>
+          <p class="subtitle">License Plate Recognition & Database Search</p>
+        </div>
+      </div>
+      <div class="status-indicator" id="statusIndicator">
+        <span class="status-dot green"></span>
+        <span class="status-text" id="statusText">System Active</span>
+      </div>
+    </header>
+
+    <main class="main-content">
+      <!-- Section 1: Upload & Scan Section -->
+      <section class="card upload-card">
+        <div class="card-header">
+          <h2><span class="icon">📸</span> Upload Vehicle Photo</h2>
+          <p>Drag and drop a license plate image to automatically extract text and save to database.</p>
+        </div>
+
+        <div class="drop-zone" id="dropZone">
+          <input type="file" id="fileInput" accept="image/*" class="file-input">
+          <div class="drop-zone-content" id="dropZoneContent">
+            <div class="upload-icon-circle">
+              <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                <polyline points="17 8 12 3 7 8"></polyline>
+                <line x1="12" y1="3" x2="12" y2="15"></line>
+              </svg>
+            </div>
+            <p class="drop-title">Drag & Drop car image here</p>
+            <p class="drop-sub">or <span class="browse-link">browse files</span> from your device</p>
+            <span class="file-types-tag">PNG, JPG, JPEG up to 10MB</span>
+          </div>
+        </div>
+
+        <!-- Live Preview & Scan Progress -->
+        <div class="scan-preview-container hidden" id="scanPreviewContainer">
+          <div class="preview-box">
+            <img id="imagePreview" src="" alt="Selected Plate Preview">
+            <div class="scan-line hidden" id="scanLine"></div>
+          </div>
+          
+          <div class="process-status" id="processStatus">
+            <div class="spinner hidden" id="uploadSpinner"></div>
+            <div class="status-details">
+              <p class="status-msg" id="statusMsg">Analyzing image with OCR...</p>
+              <div class="progress-bar-bg hidden" id="progressBarBg">
+                <div class="progress-bar-fill" id="progressBarFill"></div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Result Badge -->
+          <div class="ocr-result-badge hidden" id="ocrResultBadge">
+            <span class="label">DETECTED LICENSE PLATE</span>
+            <div class="plate-number-display" id="detectedPlateText">---</div>
+            <div class="result-actions">
+              <span class="db-saved-tag">✓ Saved to Firestore</span>
+              <button class="btn btn-secondary btn-sm" id="btnResetUpload">Upload Another</button>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Section 2: Search & Database Grid Section -->
+      <section class="card search-card">
+        <div class="card-header search-header-flex">
+          <div>
+            <h2><span class="icon">🔍</span> Plate Search & Records</h2>
+            <p>Query spotted plates from Firebase Firestore database in real-time.</p>
+          </div>
+          <div class="records-counter" id="recordsCounter">
+            0 Records Found
+          </div>
+        </div>
+
+        <!-- Search Bar -->
+        <div class="search-bar-wrapper">
+          <div class="search-input-container">
+            <svg class="search-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <circle cx="11" cy="11" r="8"></circle>
+              <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+            </svg>
+            <input type="text" id="searchInput" placeholder="Type license plate number (e.g. ABC1234)..." autocomplete="off">
+            <button class="clear-btn hidden" id="clearSearchBtn">✕</button>
+          </div>
+          <button class="btn btn-primary" id="btnSearch">Search</button>
+          <button class="btn btn-secondary" id="btnRefresh">Refresh All</button>
+        </div>
+
+        <!-- Grid Results Container -->
+        <div class="results-grid" id="resultsGrid">
+          <!-- Dynamically populated plate cards -->
+        </div>
+
+        <!-- Empty state fallback -->
+        <div class="empty-state hidden" id="emptyState">
+          <div class="empty-icon">📂</div>
+          <h3>No Spotted Plates Found</h3>
+          <p id="emptyStateText">Upload an image above to populate the database, or try a different search query.</p>
+        </div>
+      </section>
+    </main>
+
+    <footer class="footer">
+      <p>PlateVision AI Platform MVP &bull; Powered by Express, Tesseract.js & Firebase</p>
+    </footer>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
