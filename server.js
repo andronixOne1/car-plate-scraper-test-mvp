@@ -31,13 +31,17 @@ const upload = multer({
 function initFirebase() {
   if (admin.apps.length > 0) return;
 
-  const storageBucket = process.env.FIREBASE_STORAGE_BUCKET;
+  let storageBucket = process.env.FIREBASE_STORAGE_BUCKET;
 
   try {
     if (process.env.FIREBASE_SERVICE_ACCOUNT) {
       const serviceAccount = typeof process.env.FIREBASE_SERVICE_ACCOUNT === 'string'
         ? JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT)
         : process.env.FIREBASE_SERVICE_ACCOUNT;
+
+      if (!storageBucket && serviceAccount.project_id) {
+        storageBucket = `${serviceAccount.project_id}.firebasestorage.app`;
+      }
 
       admin.initializeApp({
         credential: admin.credential.cert(serviceAccount),
@@ -54,6 +58,9 @@ function initFirebase() {
 
     if (credentialPath && fs.existsSync(credentialPath)) {
       const serviceAccount = require(path.resolve(credentialPath));
+      if (!storageBucket && serviceAccount.project_id) {
+        storageBucket = `${serviceAccount.project_id}.firebasestorage.app`;
+      }
       admin.initializeApp({
         credential: admin.credential.cert(serviceAccount),
         storageBucket: storageBucket
@@ -76,7 +83,7 @@ function initFirebase() {
 initFirebase();
 
 const db = admin.apps.length ? admin.firestore() : null;
-const bucket = admin.apps.length && process.env.FIREBASE_STORAGE_BUCKET ? admin.storage().bucket() : null;
+const bucket = admin.apps.length ? admin.storage().bucket() : null;
 
 /**
  * POST /api/upload
@@ -103,7 +110,7 @@ app.post('/api/upload', upload.array('images', 10), async (req, res) => {
         results.push({
           filename: fileName,
           status: 'Declined',
-          reason: 'No valid license plate detected (Formats: XX-NNN-XX, XX-NNNN, XXX-NNN)',
+          reason: 'No valid license plate detected (Formats: XX-NNN-XX, XX-NNNN, XXX-NNN, NNNN-XX)',
           plate_number: null,
           raw_text: rawText
         });
