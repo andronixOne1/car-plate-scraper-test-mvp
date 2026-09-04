@@ -4,12 +4,19 @@ const multer = require('multer');
 const admin = require('firebase-admin');
 const path = require('path');
 const fs = require('fs');
+const crypto = require('crypto');
 const sharp = require('sharp');
 const tesseract = require('tesseract.js');
 require('dotenv').config();
 
 const app = express();
 const PORT = process.env.PORT || 10000;
+
+// Ensure public/uploads directory exists for permanent local serving
+const uploadsDir = path.join(__dirname, 'public', 'uploads');
+if (!fs.existsSync(uploadsDir)) {
+  fs.mkdirSync(uploadsDir, { recursive: true });
+}
 
 // Enable CORS and JSON parsing
 app.use(cors());
@@ -636,6 +643,29 @@ app.post('/api/upload', upload.array('images', 10), async (req, res) => {
       let confirmedPlates = [];
       let fileRawText = rawText;
 
+      // Compute image SHA-256 hash for photo deduplication
+      const imageHash = crypto.createHash('sha256').update(file.buffer).digest('hex');
+
+      // Generate optimized compressed web image for fast UI rendering
+      let imageUrl = '';
+      try {
+        const webImageBuf = await sharp(file.buffer)
+          .resize({ width: 900, height: 900, fit: 'inside', withoutEnlargement: true })
+          .jpeg({ quality: 75 })
+          .toBuffer();
+
+        const localFileName = `photo_${imageHash.slice(0, 16)}.jpg`;
+        const localFilePath = path.join(uploadsDir, localFileName);
+        if (!fs.existsSync(localFilePath)) {
+          fs.writeFileSync(localFilePath, webImageBuf);
+        }
+
+        // Store embedded base64 (30-40KB) for 100% permanent persistence across cloud container restarts
+        imageUrl = `data:image/jpeg;base64,${webImageBuf.toString('base64')}`;
+      } catch (imgErr) {
+        console.warn('Image compression warning:', imgErr.message);
+      }
+
       // Check if client provided plate(s)
       if (initialPlateNumber) {
         const clientParsed = extractLicensePlates(initialPlateNumber);
@@ -673,48 +703,45 @@ app.post('/api/upload', upload.array('images', 10), async (req, res) => {
           status: 'Declined',
           reason: 'No valid license plate detected (Formats: XX-NNN-XX, XX-NNNN, XXX-NNN, NNNN-XX)',
           plate_number: null,
+          image_url: imageUrl,
           raw_text: fileRawText
         });
         continue;
       }
 
-      // Optional Image Storage (Firebase Storage if enabled, otherwise safe compact base64)
-      let imageUrl = '';
-      if (bucket && process.env.FIREBASE_STORAGE_BUCKET) {
-        try {
-          const storagePath = `spotted_plates/${Date.now()}_${path.basename(fileName)}`;
-          const fileRef = bucket.file(storagePath);
-          await fileRef.save(file.buffer, {
-            metadata: { contentType: file.mimetype },
-            public: true
-          });
-          imageUrl = `https://storage.googleapis.com/${bucket.name}/${storagePath}`;
-        } catch (storageErr) {
-          console.warn('⚠️ Cloud Storage upload skipped/failed:', storageErr.message);
-          imageUrl = '';
-        }
-      } else if (file.buffer && file.buffer.length < 300 * 1024) {
-        imageUrl = `data:${file.mimetype};base64,${file.buffer.toString('base64')}`;
-      }
-
       const timestamp = new Date().toISOString();
       const savedDocIds = [];
 
-      // Save EACH detected license plate as an independent sighting in Firestore
+      // Save EACH detected license plate as an independent sighting in Firestore with photo-level deduplication
       for (const plateObj of confirmedPlates) {
         let docId = 'temp-' + Date.now() + '-' + Math.random().toString(36).substring(2, 6);
         if (db) {
           try {
-            const docRef = await db.collection('spotted_plates').add({
-              plate_number: plateObj.formattedPlate,
-              format_type: plateObj.formatType,
-              raw_text: fileRawText,
-              image_url: imageUrl,
-              status: 'Confirmed',
-              created_at: timestamp,
-              timestamp: admin.firestore.FieldValue.serverTimestamp()
-            });
-            docId = docRef.id;
+            // Check if THIS EXACT PHOTO was already registered for this plate (photo deduplication)
+            const existingSnapshot = await db.collection('spotted_plates')
+              .where('plate_number', '==', plateObj.formattedPlate)
+              .where('image_hash', '==', imageHash)
+              .limit(1)
+              .get();
+
+            if (!existingSnapshot.empty) {
+              docId = existingSnapshot.docs[0].id;
+              console.log(`ℹ️ Duplicate photo upload skipped for plate ${plateObj.formattedPlate} (hash: ${imageHash.slice(0, 8)})`);
+            } else {
+              const docRef = await db.collection('spotted_plates').add({
+                plate_number: plateObj.formattedPlate,
+                format_type: plateObj.formatType,
+                image_hash: imageHash,
+                image_url: imageUrl,
+                raw_text: fileRawText,
+                filename: fileName,
+                status: 'Confirmed',
+                created_at: timestamp,
+                timestamp: admin.firestore.FieldValue.serverTimestamp()
+              });
+              docId = docRef.id;
+              console.log(`📸 New photo sighting registered for plate ${plateObj.formattedPlate} (doc: ${docId})`);
+            }
           } catch (dbErr) {
             console.error('Firestore save error:', dbErr.message);
           }
@@ -760,12 +787,13 @@ app.post('/api/upload', upload.array('images', 10), async (req, res) => {
  */
 app.get('/api/search/:plate?', async (req, res) => {
   try {
-    const queryStr = req.params.plate ? req.params.plate.toUpperCase().trim() : '';
+    const rawQuery = req.params.plate ? req.params.plate.toUpperCase().trim() : '';
+    const queryClean = rawQuery.replace(/[-—–_\s]/g, '');
 
     if (!db) {
       return res.status(200).json({
         success: true,
-        query: queryStr,
+        query: rawQuery,
         results: [],
         message: 'Firestore not connected.'
       });
@@ -785,20 +813,24 @@ app.get('/api/search/:plate?', async (req, res) => {
         format_type: data.format_type,
         status: data.status || 'Confirmed',
         raw_text: data.raw_text,
-        image_url: data.image_url,
+        filename: data.filename || 'vehicle_photo.jpg',
+        image_url: data.image_url || '',
         timestamp: data.created_at || (data.timestamp ? data.timestamp.toDate().toISOString() : new Date().toISOString())
       });
     });
 
-    if (queryStr) {
-      results = results.filter(item => 
-        item.plate_number.includes(queryStr) || queryStr.includes(item.plate_number)
-      );
+    if (rawQuery) {
+      results = results.filter(item => {
+        const itemPlate = (item.plate_number || '').toUpperCase();
+        const itemClean = itemPlate.replace(/[-—–_\s]/g, '');
+        return itemPlate.includes(rawQuery) || rawQuery.includes(itemPlate) ||
+               (queryClean && itemClean.includes(queryClean)) || (queryClean && queryClean.includes(itemClean));
+      });
     }
 
     return res.status(200).json({
       success: true,
-      query: queryStr,
+      query: rawQuery,
       count: results.length,
       results: results
     });
@@ -813,7 +845,7 @@ app.get('/api/search/:plate?', async (req, res) => {
 app.get('/api/health', (req, res) => {
   res.json({
     status: 'online',
-    version: '2.3.0-multi-plate-recognition',
+    version: '2.4.0-photo-gallery-dedup',
     firebase_connected: !!db,
     storage_connected: !!bucket,
     timestamp: new Date()

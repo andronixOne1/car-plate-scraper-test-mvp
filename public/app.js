@@ -314,6 +314,116 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
 
+  // Photo Modal Elements
+  const photoModalOverlay = document.getElementById('photoModalOverlay');
+  const modalPlateBadge = document.getElementById('modalPlateBadge');
+  const modalFormatTag = document.getElementById('modalFormatTag');
+  const modalPhotoImg = document.getElementById('modalPhotoImg');
+  const modalTimestamp = document.getElementById('modalTimestamp');
+  const modalCloseBtn = document.getElementById('modalCloseBtn');
+
+  window.openPhotoModal = function(imageUrl, plate, format, time) {
+    if (!imageUrl) return;
+    modalPlateBadge.textContent = plate || 'RECOGNIZED PLATE';
+    modalFormatTag.textContent = format || 'STANDARD';
+    modalPhotoImg.src = imageUrl;
+    modalTimestamp.textContent = `📅 Sighting Recorded: ${time || 'Recently'}`;
+    photoModalOverlay.classList.remove('hidden');
+  };
+
+  if (modalCloseBtn) {
+    modalCloseBtn.addEventListener('click', () => {
+      photoModalOverlay.classList.add('hidden');
+    });
+  }
+
+  if (photoModalOverlay) {
+    photoModalOverlay.addEventListener('click', (e) => {
+      if (e.target === photoModalOverlay) {
+        photoModalOverlay.classList.add('hidden');
+      }
+    });
+  }
+
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && photoModalOverlay && !photoModalOverlay.classList.contains('hidden')) {
+      photoModalOverlay.classList.add('hidden');
+    }
+  });
+
+  // --- Real Network Upload with Progress ---
+  function uploadSingleFileWithProgress(file) {
+    return new Promise((resolve) => {
+      const xhr = new XMLHttpRequest();
+      const formData = new FormData();
+      formData.append('images', file);
+
+      // Track Stage 1 Upload Progress
+      xhr.upload.addEventListener('progress', (e) => {
+        if (e.lengthComputable) {
+          const percent = Math.min(99, Math.round((e.loaded / e.total) * 100));
+          uploadPercentLabel.textContent = `${percent}%`;
+          uploadProgressFill.style.width = `${percent}%`;
+        }
+      });
+
+      xhr.upload.addEventListener('load', () => {
+        uploadPercentLabel.textContent = '100%';
+        uploadProgressFill.style.width = '100%';
+        // Trigger Stage 2 Server AI Analysis
+        ocrStageBox.classList.remove('hidden');
+        ocrPercentLabel.textContent = 'Analyzing...';
+        ocrProgressFill.style.width = '70%';
+      });
+
+      xhr.addEventListener('load', () => {
+        ocrPercentLabel.textContent = '100%';
+        ocrProgressFill.style.width = '100%';
+        try {
+          const json = JSON.parse(xhr.responseText);
+          if (json.results && json.results.length > 0) {
+            resolve(json.results[0]);
+          } else {
+            resolve({
+              filename: file.name,
+              status: 'Declined',
+              reason: json.error || 'No valid license plate detected',
+              plate_number: null
+            });
+          }
+        } catch (err) {
+          resolve({
+            filename: file.name,
+            status: 'Declined',
+            reason: 'Server response parsing error',
+            plate_number: null
+          });
+        }
+      });
+
+      xhr.addEventListener('error', () => {
+        resolve({
+          filename: file.name,
+          status: 'Declined',
+          reason: 'Network upload error',
+          plate_number: null
+        });
+      });
+
+      xhr.addEventListener('abort', () => {
+        resolve({
+          filename: file.name,
+          status: 'Declined',
+          reason: 'Upload cancelled',
+          plate_number: null
+        });
+      });
+
+      xhr.open('POST', '/api/upload');
+      xhr.send(formData);
+    });
+  }
+
   // --- Batch File Processing Routine ---
   async function processBatchFiles(fileList) {
     const files = Array.from(fileList).filter(f => f.type.startsWith('image/'));
@@ -342,131 +452,17 @@ document.addEventListener('DOMContentLoaded', () => {
       ocrPercentLabel.textContent = '0%';
       ocrProgressFill.style.width = '0%';
 
-      // STAGE 1: Upload Progress (0% -> 100%)
-      await simulateUploadProgress((p) => {
-        uploadPercentLabel.textContent = `${p}%`;
-        uploadProgressFill.style.width = `${p}%`;
-      });
+      const serverResult = await uploadSingleFileWithProgress(file);
+      batchResults.push(serverResult);
 
-      // STAGE 2: OCR Identification Analysis Progress
-      ocrStageBox.classList.remove('hidden');
-
-      let rawText = '';
-      let validation = { isValid: false };
-
-      try {
-        const loadedImg = await loadImage(file);
-
-        // Smoothly animate Stage 2 OCR progress bar to 100%
-        let progressInterval = setInterval(() => {
-          let cur = parseInt(ocrPercentLabel.textContent) || 0;
-          if (cur < 95) {
-            cur += Math.floor(Math.random() * 15) + 5;
-            if (cur > 95) cur = 95;
-            ocrPercentLabel.textContent = `${cur}%`;
-            ocrProgressFill.style.width = `${cur}%`;
-          }
-        }, 150);
-
-        // Pass 1: Clean Natural Image (Preserves crisp character edges)
-        const naturalDataUrl = preprocessImageToCanvas(loadedImg, 'natural');
-        const res1 = await Tesseract.recognize(naturalDataUrl, 'eng');
-        rawText = res1.data.text || '';
-        validation = extractLicensePlate(rawText);
-
-        // Pass 2: Lower Plate Zone Crop (Focuses on vehicle bumper)
-        if (!validation.isValid) {
-          const croppedDataUrl = preprocessImageToCanvas(loadedImg, 'crop');
-          const res2 = await Tesseract.recognize(croppedDataUrl, 'eng');
-          const text2 = res2.data.text || '';
-          rawText += ' ' + text2;
-          validation = extractLicensePlate(text2);
-          if (!validation.isValid) {
-            validation = extractLicensePlate(rawText);
-          }
-        }
-
-        // Pass 3: Multi-Angle Perspective Passes (Rotated canvas for angled cars)
-        if (!validation.isValid) {
-          for (const rotMode of ['rot_13', 'rot_neg13']) {
-            const rotDataUrl = preprocessImageToCanvas(loadedImg, rotMode);
-            const rotRes = await Tesseract.recognize(rotDataUrl, 'eng');
-            const rotText = rotRes.data.text || '';
-            rawText += ' ' + rotText;
-            validation = extractLicensePlate(rotText);
-            if (validation.isValid) break;
-            validation = extractLicensePlate(rawText);
-            if (validation.isValid) break;
-          }
-        }
-
-        clearInterval(progressInterval);
-
-      } catch (err) {
-        console.error('Client OCR error:', err);
-      }
-
-      // Complete Stage 2 at 100%
-      ocrPercentLabel.textContent = '100%';
-      ocrProgressFill.style.width = '100%';
-
-      // Send to server
-      const serverResponse = await uploadFileToServer(file, validation, rawText);
-      batchResults.push(serverResponse);
-
-      await new Promise(r => setTimeout(r, 300));
+      // Instantly append to upload log
+      appendUploadSummary([serverResult]);
+      await new Promise(r => setTimeout(r, 200));
     }
 
     progressSection.classList.add('hidden');
     fileInput.value = '';
-    appendUploadSummary(batchResults);
     fetchSpottedPlates(searchInput.value.trim());
-  }
-
-  function simulateUploadProgress(onProgress) {
-    return new Promise((resolve) => {
-      let current = 0;
-      const interval = setInterval(() => {
-        current += 25;
-        if (current >= 100) {
-          current = 100;
-          onProgress(100);
-          clearInterval(interval);
-          resolve();
-        } else {
-          onProgress(current);
-        }
-      }, 80);
-    });
-  }
-
-  async function uploadFileToServer(file, validation, rawText) {
-    const formData = new FormData();
-    formData.append('images', file);
-    formData.append('plate_number', validation.formattedPlate || '');
-    formData.append('format_type', validation.formatType || '');
-    formData.append('status', validation.isValid ? 'Confirmed' : 'Declined');
-    formData.append('raw_text', rawText);
-
-    try {
-      const response = await fetch('/api/upload', {
-        method: 'POST',
-        body: formData
-      });
-      const data = await response.json();
-      if (data.results && data.results.length > 0) {
-        return data.results[0];
-      }
-    } catch (e) {
-      console.error('Server upload error:', e);
-    }
-
-    return {
-      filename: file.name,
-      status: validation.isValid ? 'Confirmed' : 'Declined',
-      reason: validation.isValid ? 'Saved' : 'No valid plate detected (XX-NNN-XX, XX-NNNN, XXX-NNN, NNNN-XX)',
-      plate_number: validation.formattedPlate
-    };
   }
 
   function appendUploadSummary(results) {
@@ -528,7 +524,7 @@ document.addEventListener('DOMContentLoaded', () => {
   // --- Search & Database List ---
   async function fetchSpottedPlates(query = '') {
     try {
-      recordsTableBody.innerHTML = '<tr><td colspan="4" style="text-align: center; color: var(--text-muted); padding: 1.5rem;">Loading records...</td></tr>';
+      recordsTableBody.innerHTML = '<tr><td colspan="5" style="text-align: center; color: var(--text-muted); padding: 1.5rem;">Loading records...</td></tr>';
       
       const endpoint = query ? `/api/search/${encodeURIComponent(query)}` : '/api/search';
       const response = await fetch(endpoint);
@@ -562,8 +558,19 @@ document.addEventListener('DOMContentLoaded', () => {
     records.forEach(item => {
       const row = document.createElement('tr');
       const formattedTime = item.timestamp ? new Date(item.timestamp).toLocaleString() : 'Recently spotted';
+      const safeImgUrl = item.image_url ? item.image_url.replace(/'/g, "\\'") : '';
+      const safePlate = (item.plate_number || '').replace(/'/g, "\\'");
+      const safeFormat = (item.format_type || '').replace(/'/g, "\\'");
+      const safeTime = formattedTime.replace(/'/g, "\\'");
+
+      const thumbnailHtml = item.image_url
+        ? `<div class="record-thumbnail-wrapper" onclick="openPhotoModal('${safeImgUrl}', '${safePlate}', '${safeFormat}', '${safeTime}')" title="Click to view photo">
+             <img src="${item.image_url}" class="record-thumbnail" alt="${item.plate_number || 'Sighting'}">
+           </div>`
+        : `<div class="record-thumbnail-wrapper"><span class="thumbnail-placeholder">📷</span></div>`;
 
       row.innerHTML = `
+        <td style="text-align: center;">${thumbnailHtml}</td>
         <td><span class="plate-mono">${item.plate_number || 'UNKNOWN'}</span></td>
         <td><span class="format-tag">${item.format_type || 'STANDARD'}</span></td>
         <td style="color: var(--text-muted); font-size: 0.85rem;">📅 ${formattedTime}</td>

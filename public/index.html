@@ -137,11 +137,12 @@
           <button class="btn btn-secondary" id="btnRefresh">Refresh All</button>
         </div>
 
-        <!-- Clean Text List of Confirmed Records (No Image Cards) -->
+        <!-- Search & Confirmed Records Table with Photos -->
         <div class="records-list-container">
           <table class="status-table records-table">
             <thead>
               <tr>
+                <th style="width: 80px; text-align: center;">Photo</th>
                 <th>License Plate</th>
                 <th>Format</th>
                 <th>Spotted Timestamp</th>
@@ -163,8 +164,27 @@
       </section>
     </main>
 
+    <!-- Photo Lightbox Modal -->
+    <div class="photo-modal-overlay hidden" id="photoModalOverlay">
+      <div class="photo-modal-card">
+        <div class="photo-modal-header">
+          <div class="photo-modal-title">
+            <span id="modalPlateBadge" class="plate-mono"></span>
+            <span id="modalFormatTag" class="format-tag"></span>
+          </div>
+          <button class="modal-close-btn" id="modalCloseBtn" title="Close">✕</button>
+        </div>
+        <div class="photo-modal-body">
+          <img id="modalPhotoImg" src="" alt="Spotted Vehicle">
+        </div>
+        <div class="photo-modal-footer">
+          <span id="modalTimestamp" style="color: var(--text-muted); font-size: 0.85rem;"></span>
+        </div>
+      </div>
+    </div>
+
     <footer class="footer">
-      <p>PlateVision AI Platform MVP &bull; Powered by Express, Tesseract.js & Firebase</p>
+      <p>PlateVision AI Platform MVP &bull; Powered by Express, Sharp & Firebase</p>
     </footer>
   </div>
 
