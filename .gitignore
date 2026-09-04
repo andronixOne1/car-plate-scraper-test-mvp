@@ -3,5 +3,7 @@ __pycache__/
 venv/
 node_modules/
 .env
+serviceAccountKey.json
+*serviceAccount*.json
 *.csv
 *.log
