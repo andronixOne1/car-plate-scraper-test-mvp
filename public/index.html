@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>PlateVision AI - License Plate Recognition & Search</title>
+  <title>PlateVision AI - License Plate Verification Platform</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet">
@@ -17,7 +17,7 @@
         <div class="logo-icon">🚗</div>
         <div>
           <h1>PlateVision <span class="badge-ai">AI</span></h1>
-          <p class="subtitle">License Plate Recognition & Database Search</p>
+          <p class="subtitle">Multi-Image License Plate Recognition & Database Search</p>
         </div>
       </div>
       <div class="status-indicator" id="statusIndicator">
@@ -27,15 +27,15 @@
     </header>
 
     <main class="main-content">
-      <!-- Section 1: Upload & Scan Section -->
+      <!-- Section 1: Multi-Image Upload Section -->
       <section class="card upload-card">
         <div class="card-header">
-          <h2><span class="icon">📸</span> Upload Vehicle Photo</h2>
-          <p>Drag and drop a license plate image to automatically extract text and save to database.</p>
+          <h2><span class="icon">📸</span> Batch Upload Vehicle Photos</h2>
+          <p>Select or drop multiple car photos. Only valid license plates matching <code>xx-nnn-xx</code>, <code>xx-nnnn</code>, or <code>xxx-nnn</code> will be confirmed and saved.</p>
         </div>
 
         <div class="drop-zone" id="dropZone">
-          <input type="file" id="fileInput" accept="image/*" class="file-input">
+          <input type="file" id="fileInput" accept="image/*" multiple class="file-input">
           <div class="drop-zone-content" id="dropZoneContent">
             <div class="upload-icon-circle">
               <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -44,47 +44,57 @@
                 <line x1="12" y1="3" x2="12" y2="15"></line>
               </svg>
             </div>
-            <p class="drop-title">Drag & Drop car image here</p>
+            <p class="drop-title">Drag & Drop car images here (Select multiple files)</p>
             <p class="drop-sub">or <span class="browse-link">browse files</span> from your device</p>
-            <span class="file-types-tag">PNG, JPG, JPEG up to 10MB</span>
+            <span class="file-types-tag">Supported formats: XX-NNN-XX, XX-NNNN, XXX-NNN</span>
           </div>
         </div>
 
-        <!-- Live Preview & Scan Progress -->
-        <div class="scan-preview-container hidden" id="scanPreviewContainer">
-          <div class="preview-box">
-            <img id="imagePreview" src="" alt="Selected Plate Preview">
-            <div class="scan-line hidden" id="scanLine"></div>
-          </div>
-          
-          <div class="process-status" id="processStatus">
-            <div class="spinner hidden" id="uploadSpinner"></div>
-            <div class="status-details">
-              <p class="status-msg" id="statusMsg">Analyzing image with OCR...</p>
-              <div class="progress-bar-bg hidden" id="progressBarBg">
-                <div class="progress-bar-fill" id="progressBarFill"></div>
-              </div>
+        <!-- Processing Indicator -->
+        <div class="processing-bar-wrapper hidden" id="processingBar">
+          <div class="spinner"></div>
+          <span id="processingText">Processing images through License Plate OCR...</span>
+        </div>
+
+        <!-- Batch Results Status Table (No Thumbnails) -->
+        <div class="uploads-summary-container hidden" id="uploadsSummaryContainer">
+          <div class="summary-header">
+            <h3>📋 Upload Processing Summary</h3>
+            <div class="summary-pills">
+              <span class="pill confirmed-pill" id="summaryConfirmedCount">0 Confirmed</span>
+              <span class="pill declined-pill" id="summaryDeclinedCount">0 Declined</span>
             </div>
           </div>
 
-          <!-- Result Badge -->
-          <div class="ocr-result-badge hidden" id="ocrResultBadge">
-            <span class="label">DETECTED LICENSE PLATE</span>
-            <div class="plate-number-display" id="detectedPlateText">---</div>
-            <div class="result-actions">
-              <span class="db-saved-tag">✓ Saved to Firestore</span>
-              <button class="btn btn-secondary btn-sm" id="btnResetUpload">Upload Another</button>
-            </div>
+          <div class="table-responsive">
+            <table class="status-table">
+              <thead>
+                <tr>
+                  <th>File Name</th>
+                  <th>Detected Plate</th>
+                  <th>Format</th>
+                  <th>Status</th>
+                  <th>Details</th>
+                </tr>
+              </thead>
+              <tbody id="batchStatusTableBody">
+                <!-- Dynamically populated -->
+              </tbody>
+            </table>
+          </div>
+
+          <div class="summary-actions">
+            <button class="btn btn-secondary btn-sm" id="btnResetUpload">Upload More Images</button>
           </div>
         </div>
       </section>
 
-      <!-- Section 2: Search & Database Grid Section -->
+      <!-- Section 2: Search & Confirmed Database Records -->
       <section class="card search-card">
         <div class="card-header search-header-flex">
           <div>
-            <h2><span class="icon">🔍</span> Plate Search & Records</h2>
-            <p>Query spotted plates from Firebase Firestore database in real-time.</p>
+            <h2><span class="icon">🔍</span> Confirmed Plates Database</h2>
+            <p>Query valid spotted plates saved in Firebase Firestore.</p>
           </div>
           <div class="records-counter" id="recordsCounter">
             0 Records Found
@@ -98,23 +108,35 @@
               <circle cx="11" cy="11" r="8"></circle>
               <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
             </svg>
-            <input type="text" id="searchInput" placeholder="Type license plate number (e.g. ABC1234)..." autocomplete="off">
+            <input type="text" id="searchInput" placeholder="Search license plate (e.g. AB-123-CD)..." autocomplete="off">
             <button class="clear-btn hidden" id="clearSearchBtn">✕</button>
           </div>
           <button class="btn btn-primary" id="btnSearch">Search</button>
           <button class="btn btn-secondary" id="btnRefresh">Refresh All</button>
         </div>
 
-        <!-- Grid Results Container -->
-        <div class="results-grid" id="resultsGrid">
-          <!-- Dynamically populated plate cards -->
+        <!-- Clean Text List of Confirmed Records (No Image Cards) -->
+        <div class="records-list-container">
+          <table class="status-table records-table">
+            <thead>
+              <tr>
+                <th>License Plate</th>
+                <th>Format</th>
+                <th>Spotted Timestamp</th>
+                <th>Status</th>
+              </tr>
+            </thead>
+            <tbody id="recordsTableBody">
+              <!-- Dynamically populated -->
+            </tbody>
+          </table>
         </div>
 
         <!-- Empty state fallback -->
         <div class="empty-state hidden" id="emptyState">
           <div class="empty-icon">📂</div>
-          <h3>No Spotted Plates Found</h3>
-          <p id="emptyStateText">Upload an image above to populate the database, or try a different search query.</p>
+          <h3>No Confirmed License Plates Found</h3>
+          <p id="emptyStateText">Upload vehicle photos matching standard formats to populate the database.</p>
         </div>
       </section>
     </main>

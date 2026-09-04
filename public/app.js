@@ -2,26 +2,25 @@ document.addEventListener('DOMContentLoaded', () => {
   // DOM Elements
   const dropZone = document.getElementById('dropZone');
   const fileInput = document.getElementById('fileInput');
-  const scanPreviewContainer = document.getElementById('scanPreviewContainer');
-  const imagePreview = document.getElementById('imagePreview');
-  const scanLine = document.getElementById('scanLine');
-  const uploadSpinner = document.getElementById('uploadSpinner');
-  const statusMsg = document.getElementById('statusMsg');
-  const ocrResultBadge = document.getElementById('ocrResultBadge');
-  const detectedPlateText = document.getElementById('detectedPlateText');
+  const processingBar = document.getElementById('processingBar');
+  const processingText = document.getElementById('processingText');
+  const uploadsSummaryContainer = document.getElementById('uploadsSummaryContainer');
+  const batchStatusTableBody = document.getElementById('batchStatusTableBody');
+  const summaryConfirmedCount = document.getElementById('summaryConfirmedCount');
+  const summaryDeclinedCount = document.getElementById('summaryDeclinedCount');
   const btnResetUpload = document.getElementById('btnResetUpload');
 
   const searchInput = document.getElementById('searchInput');
   const clearSearchBtn = document.getElementById('clearSearchBtn');
   const btnSearch = document.getElementById('btnSearch');
   const btnRefresh = document.getElementById('btnRefresh');
-  const resultsGrid = document.getElementById('resultsGrid');
+  const recordsTableBody = document.getElementById('recordsTableBody');
   const recordsCounter = document.getElementById('recordsCounter');
   const emptyState = document.getElementById('emptyState');
   const statusIndicator = document.getElementById('statusIndicator');
   const statusText = document.getElementById('statusText');
 
-  // Check Backend System Health
+  // Check System Health
   async function checkHealth() {
     try {
       const res = await fetch('/api/health');
@@ -40,9 +39,7 @@ document.addEventListener('DOMContentLoaded', () => {
   }
   checkHealth();
 
-  // --- Upload & File Handling ---
-
-  // Drag and drop event listeners
+  // --- Drag and Drop File Handlers ---
   ['dragenter', 'dragover'].forEach(eventName => {
     dropZone.addEventListener(eventName, (e) => {
       e.preventDefault();
@@ -62,48 +59,42 @@ document.addEventListener('DOMContentLoaded', () => {
   dropZone.addEventListener('drop', (e) => {
     const files = e.dataTransfer.files;
     if (files.length > 0) {
-      handleFileUpload(files[0]);
+      handleBatchFileUpload(files);
     }
   });
 
   fileInput.addEventListener('change', (e) => {
     if (e.target.files.length > 0) {
-      handleFileUpload(e.target.files[0]);
+      handleBatchFileUpload(e.target.files);
     }
   });
 
-  // Reset upload form
   btnResetUpload.addEventListener('click', () => {
     fileInput.value = '';
     dropZone.classList.remove('hidden');
-    scanPreviewContainer.classList.add('hidden');
-    ocrResultBadge.classList.add('hidden');
+    uploadsSummaryContainer.classList.add('hidden');
+    processingBar.classList.add('hidden');
   });
 
-  async function handleFileUpload(file) {
-    if (!file.type.startsWith('image/')) {
-      alert('Please upload a valid image file (PNG, JPG, etc.).');
+  // --- Batch File Upload Processing ---
+  async function handleBatchFileUpload(fileList) {
+    const files = Array.from(fileList).filter(f => f.type.startsWith('image/'));
+
+    if (files.length === 0) {
+      alert('Please upload valid image files (PNG, JPG, etc.).');
       return;
     }
 
-    // Show image preview
-    const reader = new FileReader();
-    reader.onload = (e) => {
-      imagePreview.src = e.target.result;
-    };
-    reader.readAsDataURL(file);
-
     // Update UI State
     dropZone.classList.add('hidden');
-    scanPreviewContainer.classList.remove('hidden');
-    scanLine.classList.remove('hidden');
-    uploadSpinner.classList.remove('hidden');
-    ocrResultBadge.classList.add('hidden');
-    statusMsg.textContent = 'Uploading photo & performing license plate OCR analysis...';
+    processingBar.classList.remove('hidden');
+    uploadsSummaryContainer.classList.add('hidden');
+    processingText.textContent = `Analyzing ${files.length} image(s) for valid license plates...`;
 
-    // Prepare FormData
     const formData = new FormData();
-    formData.append('image', file);
+    files.forEach(file => {
+      formData.append('images', file);
+    });
 
     try {
       const response = await fetch('/api/upload', {
@@ -113,35 +104,68 @@ document.addEventListener('DOMContentLoaded', () => {
 
       const result = await response.json();
 
+      processingBar.classList.add('hidden');
+
       if (response.ok && result.success) {
-        // Success state
-        scanLine.classList.add('hidden');
-        uploadSpinner.classList.add('hidden');
-        statusMsg.textContent = 'OCR Processing Complete!';
-
-        detectedPlateText.textContent = result.plate_number || 'UNKNOWN';
-        ocrResultBadge.classList.remove('hidden');
-
-        // Automatically refresh search list to show new upload
+        renderUploadSummary(result);
+        // Refresh confirmed records database list
         fetchSpottedPlates(searchInput.value.trim());
-
       } else {
-        throw new Error(result.error || 'Failed to analyze plate.');
+        throw new Error(result.error || 'Failed to process batch upload.');
       }
 
     } catch (error) {
-      console.error('Upload Error:', error);
-      scanLine.classList.add('hidden');
-      uploadSpinner.classList.add('hidden');
-      statusMsg.textContent = `Error: ${error.message}`;
+      console.error('Batch Upload Error:', error);
+      processingBar.classList.add('hidden');
+      alert(`Upload Error: ${error.message}`);
+      dropZone.classList.remove('hidden');
     }
   }
 
-  // --- Search & Database Fetching ---
+  // Render Upload Processing Summary Table (No Thumbnails)
+  function renderUploadSummary(batchResult) {
+    uploadsSummaryContainer.classList.remove('hidden');
+    batchStatusTableBody.innerHTML = '';
 
+    summaryConfirmedCount.textContent = `${batchResult.confirmed} Confirmed`;
+    summaryDeclinedCount.textContent = `${batchResult.declined} Declined`;
+
+    batchResult.results.forEach(item => {
+      const row = document.createElement('tr');
+
+      const isConfirmed = item.status === 'Confirmed';
+      const statusBadge = isConfirmed
+        ? `<span class="badge-confirmed">✓ Confirmed</span>`
+        : `<span class="badge-declined">✕ Declined</span>`;
+
+      const plateCell = isConfirmed
+        ? `<span class="plate-mono">${item.plate_number}</span>`
+        : `<span style="color: var(--text-dim); font-style: italic;">None detected</span>`;
+
+      const formatCell = item.format_type
+        ? `<span class="format-tag">${item.format_type}</span>`
+        : `<span style="color: var(--text-dim);">-</span>`;
+
+      const detailsCell = isConfirmed
+        ? `<span style="color: #34d399;">Valid license plate format saved</span>`
+        : `<span style="color: #f87171;">${item.reason || 'Invalid format'}</span>`;
+
+      row.innerHTML = `
+        <td><strong>${item.filename}</strong></td>
+        <td>${plateCell}</td>
+        <td>${formatCell}</td>
+        <td>${statusBadge}</td>
+        <td>${detailsCell}</td>
+      `;
+
+      batchStatusTableBody.appendChild(row);
+    });
+  }
+
+  // --- Search & Confirmed Records Database List ---
   async function fetchSpottedPlates(query = '') {
     try {
-      resultsGrid.innerHTML = '<div style="grid-column: 1/-1; text-align: center; color: var(--text-muted); padding: 2rem;">Loading spotted plates...</div>';
+      recordsTableBody.innerHTML = '<tr><td colspan="4" style="text-align: center; color: var(--text-muted); padding: 1.5rem;">Loading records...</td></tr>';
       
       const endpoint = query ? `/api/search/${encodeURIComponent(query)}` : '/api/search';
       const response = await fetch(endpoint);
@@ -151,19 +175,19 @@ document.addEventListener('DOMContentLoaded', () => {
         throw new Error(data.error || 'Search query failed.');
       }
 
-      renderResults(data.results || []);
+      renderConfirmedRecords(data.results || []);
 
     } catch (error) {
       console.error('Search error:', error);
-      resultsGrid.innerHTML = '';
+      recordsTableBody.innerHTML = '';
       emptyState.classList.remove('hidden');
       recordsCounter.textContent = 'Error loading records';
     }
   }
 
-  function renderResults(records) {
-    resultsGrid.innerHTML = '';
-    recordsCounter.textContent = `${records.length} Record${records.length === 1 ? '' : 's'} Found`;
+  function renderConfirmedRecords(records) {
+    recordsTableBody.innerHTML = '';
+    recordsCounter.textContent = `${records.length} Confirmed Record${records.length === 1 ? '' : 's'}`;
 
     if (!records || records.length === 0) {
       emptyState.classList.remove('hidden');
@@ -173,22 +197,17 @@ document.addEventListener('DOMContentLoaded', () => {
     emptyState.classList.add('hidden');
 
     records.forEach(item => {
-      const card = document.createElement('div');
-      card.className = 'plate-card';
-
+      const row = document.createElement('tr');
       const formattedTime = item.timestamp ? new Date(item.timestamp).toLocaleString() : 'Recently spotted';
 
-      card.innerHTML = `
-        <div class="plate-card-img-container">
-          <img src="${item.image_url}" alt="Spotted Plate ${item.plate_number}" loading="lazy" onerror="this.src='data:image/svg+xml;utf8,<svg xmlns=\'http://www.w3.org/2000/svg\' width=\'100\' height=\'100\' fill=\'%236b7280\'><text x=\'50%\' y=\'50%\' dominant-baseline=\'middle\' text-anchor=\'middle\'>No Image</text></svg>'">
-        </div>
-        <div class="plate-card-body">
-          <div class="plate-badge-small">${item.plate_number || 'UNKNOWN'}</div>
-          <div class="plate-timestamp">📅 ${formattedTime}</div>
-        </div>
+      row.innerHTML = `
+        <td><span class="plate-mono">${item.plate_number || 'UNKNOWN'}</span></td>
+        <td><span class="format-tag">${item.format_type || 'STANDARD'}</span></td>
+        <td style="color: var(--text-muted); font-size: 0.85rem;">📅 ${formattedTime}</td>
+        <td><span class="badge-confirmed">✓ Confirmed</span></td>
       `;
 
-      resultsGrid.appendChild(card);
+      recordsTableBody.appendChild(row);
     });
   }
 
@@ -221,6 +240,6 @@ document.addEventListener('DOMContentLoaded', () => {
     fetchSpottedPlates();
   });
 
-  // Initial fetch on app load
+  // Initial load
   fetchSpottedPlates();
 });
