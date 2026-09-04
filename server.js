@@ -108,80 +108,145 @@ function fixDigits(str) {
     .replace(/B/g, '8');
 }
 
-function extractLicensePlate(rawText) {
-  if (!rawText) return { isValid: false, formattedPlate: null, formatType: null };
+function extractLicensePlates(rawText) {
+  if (!rawText) return { isValid: false, plates: [], formattedPlate: null, formatType: null };
 
-  const normalized = rawText.toUpperCase()
+  const preprocessed = rawText.toUpperCase()
+    .replace(/[|]/g, 'I')
+    .replace(/[\r\n]+/g, ' ');
+
+  const normalized = preprocessed
     .replace(/[—–_·•:]+/g, '-')
-    .replace(/[\r\n]+/g, ' ')
     .replace(/\s*-\s*/g, '-');
 
+  const squashed = normalized.replace(/\s+/g, '');
   const cleaned = normalized.replace(/\b(GE|EU|AM|AZ|TR|UA|MD|RO|BG|PL|DE|FR|IT|ES)[-\s]+/gi, '');
-  const textsToTry = [cleaned, normalized, rawText.toUpperCase().replace(/[\r\n]+/g, ' ')];
+  const textsToTry = [cleaned, normalized, squashed, preprocessed];
+
+  const foundMap = new Map();
+
+  function addPlate(p1, p2, p3, formatType) {
+    if (formatType === 'XX-NNN-XX') {
+      let l1 = fixLetters(p1), d2 = fixDigits(p2), l3 = fixLetters(p3);
+      if ((l1.startsWith('U') || l1.startsWith('Y')) && /^[A-Z]{2}$/.test(l1)) {
+        l1 = 'V' + l1.slice(1);
+      }
+      if (l1 === 'VI') l1 = 'VL'; // Slanted Georgian VL series repair
+      if (/^[A-Z]{2}$/.test(l1) && /^\d{3}$/.test(d2) && /^[A-Z]{2}$/.test(l3)) {
+        foundMap.set(`${l1}-${d2}-${l3}`, 'XX-NNN-XX');
+      }
+    } else if (formatType === 'XX-NNNN') {
+      let l1 = fixLetters(p1), d2 = fixDigits(p2);
+      if (/^[A-Z]{2}$/.test(l1) && /^\d{4}$/.test(d2)) {
+        foundMap.set(`${l1}-${d2}`, 'XX-NNNN');
+      }
+    } else if (formatType === 'XXX-NNN') {
+      let l1 = fixLetters(p1), d2 = fixDigits(p2);
+      if (/^[A-Z]{3}$/.test(l1) && /^\d{3}$/.test(d2)) {
+        foundMap.set(`${l1}-${d2}`, 'XXX-NNN');
+      }
+    } else if (formatType === 'NNNN-XX') {
+      let d1 = fixDigits(p1), l2 = fixLetters(p2);
+      if (/^\d{4}$/.test(d1) && /^[A-Z]{2}$/.test(l2)) {
+        foundMap.set(`${d1}-${l2}`, 'NNNN-XX');
+      }
+    }
+  }
 
   for (const t of textsToTry) {
-    const m1 = t.match(/(?:^|[^A-Z0-9])([A-Z0-9]{2})[- ]*([A-Z0-9]{3})[- ]*([A-Z0-9]{2})(?:$|[^A-Z0-9])/);
-    if (m1) {
-      let p1 = fixLetters(m1[1]), p2 = fixDigits(m1[2]), p3 = fixLetters(m1[3]);
-      if ((p1.startsWith('U') || p1.startsWith('Y')) && /^[A-Z]{2}$/.test(p1)) {
-        p1 = 'V' + p1.slice(1);
-      }
-      if (/^[A-Z]{2}$/.test(p1) && /^\d{3}$/.test(p2) && /^[A-Z]{2}$/.test(p3)) {
-        return { isValid: true, formattedPlate: `${p1}-${p2}-${p3}`, formatType: 'XX-NNN-XX' };
-      }
+    // Format 1: XX-NNN-XX (standard Georgian plate)
+    const regex1 = /(?:^|[^A-Z0-9])([A-Z0-9]{2,4})[-—–_·•:\s]*([0-9OQILZSB]{3})[-—–_·•:\s]*([A-Z0-9]{2})(?:$|[^A-Z0-9])/gi;
+    for (const m of t.matchAll(regex1)) {
+      const rawPrefix = m[1];
+      const p1 = rawPrefix.length > 2 ? rawPrefix.slice(-2) : rawPrefix;
+      addPlate(p1, m[2], m[3], 'XX-NNN-XX');
     }
 
-    const m2 = t.match(/(?:^|[^A-Z0-9])([A-Z0-9]{2})[- ]*([A-Z0-9]{4})(?:$|[^A-Z0-9])/);
-    if (m2) {
-      let p1 = fixLetters(m2[1]), p2 = fixDigits(m2[2]);
-      if (/^[A-Z]{2}$/.test(p1) && /^\d{4}$/.test(p2)) {
-        return { isValid: true, formattedPlate: `${p1}-${p2}`, formatType: 'XX-NNNN' };
-      }
+    // Format 2: XX-NNNN
+    const regex2 = /(?:^|[^A-Z0-9])([A-Z0-9]{2})[- ]*([A-Z0-9]{4})(?:$|[^A-Z0-9])/g;
+    for (const m of t.matchAll(regex2)) {
+      addPlate(m[1], m[2], null, 'XX-NNNN');
     }
 
-    const m3 = t.match(/(?:^|[^A-Z0-9])([A-Z0-9]{3})[- ]*([A-Z0-9]{3})(?:$|[^A-Z0-9])/);
-    if (m3) {
-      let p1 = fixLetters(m3[1]), p2 = fixDigits(m3[2]);
-      if (/^[A-Z]{3}$/.test(p1) && /^\d{3}$/.test(p2)) {
-        return { isValid: true, formattedPlate: `${p1}-${p2}`, formatType: 'XXX-NNN' };
-      }
+    // Format 3: XXX-NNN
+    const regex3 = /(?:^|[^A-Z0-9])([A-Z0-9]{3})[- ]*([A-Z0-9]{3})(?:$|[^A-Z0-9])/g;
+    for (const m of t.matchAll(regex3)) {
+      addPlate(m[1], m[2], null, 'XXX-NNN');
     }
 
-    const m4 = t.match(/(?:^|[^A-Z0-9])([A-Z0-9]{4})[- ]*([A-Z0-9]{2})(?:$|[^A-Z0-9])/);
-    if (m4) {
-      let p1 = fixDigits(m4[1]), p2 = fixLetters(m4[2]);
-      if (/^\d{4}$/.test(p1) && /^[A-Z]{2}$/.test(p2)) {
-        return { isValid: true, formattedPlate: `${p1}-${p2}`, formatType: 'NNNN-XX' };
-      }
+    // Format 4: NNNN-XX
+    const regex4 = /(?:^|[^A-Z0-9])([A-Z0-9]{4})[- ]*([A-Z0-9]{2})(?:$|[^A-Z0-9])/g;
+    for (const m of t.matchAll(regex4)) {
+      addPlate(m[1], m[2], null, 'NNNN-XX');
     }
   }
 
   const tokens = normalized.match(/[A-Z0-9]{6,12}/g) || [];
   for (const token of tokens) {
     if (token.length === 7) {
-      let p1 = fixLetters(token.slice(0, 2)), p2 = fixDigits(token.slice(2, 5)), p3 = fixLetters(token.slice(5, 7));
-      if (p1.startsWith('U') || p1.startsWith('Y')) p1 = 'V' + p1.slice(1);
-      if (/^[A-Z]{2}$/.test(p1) && /^\d{3}$/.test(p2) && /^[A-Z]{2}$/.test(p3)) {
-        return { isValid: true, formattedPlate: `${p1}-${p2}-${p3}`, formatType: 'XX-NNN-XX' };
-      }
+      addPlate(token.slice(0, 2), token.slice(2, 5), token.slice(5, 7), 'XX-NNN-XX');
     }
     if (token.length === 9) {
       const sub = token.slice(2);
-      let p1 = fixLetters(sub.slice(0, 2)), p2 = fixDigits(sub.slice(2, 5)), p3 = fixLetters(sub.slice(5, 7));
-      if (p1.startsWith('U') || p1.startsWith('Y')) p1 = 'V' + p1.slice(1);
-      if (/^[A-Z]{2}$/.test(p1) && /^\d{3}$/.test(p2) && /^[A-Z]{2}$/.test(p3)) {
-        return { isValid: true, formattedPlate: `${p1}-${p2}-${p3}`, formatType: 'XX-NNN-XX' };
-      }
+      addPlate(sub.slice(0, 2), sub.slice(2, 5), sub.slice(5, 7), 'XX-NNN-XX');
     }
     if (token.length === 6) {
-      const p1 = fixLetters(token.slice(0, 2)), p2 = fixDigits(token.slice(2, 6));
-      if (/^[A-Z]{2}$/.test(p1) && /^\d{4}$/.test(p2)) {
-        return { isValid: true, formattedPlate: `${p1}-${p2}`, formatType: 'XX-NNNN' };
-      }
+      addPlate(token.slice(0, 2), token.slice(2, 6), null, 'XX-NNNN');
     }
   }
 
-  return { isValid: false, formattedPlate: null, formatType: null };
+  let rawPlates = Array.from(foundMap.entries()).map(([formattedPlate, formatType]) => ({
+    formattedPlate,
+    formatType
+  }));
+
+  const fullPlates = rawPlates.filter(p => p.formatType === 'XX-NNN-XX').map(p => p.formattedPlate);
+  if (fullPlates.length > 0) {
+    rawPlates = rawPlates.filter(p => {
+      if (p.formatType === 'XX-NNN-XX') return true;
+      for (const full of fullPlates) {
+        const fullDigits = full.split('-')[1];
+        if (p.formattedPlate.includes(fullDigits)) return false;
+      }
+      return true;
+    });
+
+    const xxPlates = rawPlates.filter(p => p.formatType === 'XX-NNN-XX');
+    const prunedPlates = [];
+    for (const p of xxPlates) {
+      const [l1, d2, l3] = p.formattedPlate.split('-');
+      const duplicate = xxPlates.find(other => {
+        if (other.formattedPlate === p.formattedPlate) return false;
+        const [ol1, od2, ol3] = other.formattedPlate.split('-');
+        return ol1 === l1 && ol3 === l3;
+      });
+      if (duplicate) {
+        const [dl1, dd2, dl3] = duplicate.formattedPlate.split('-');
+        const isThisRepeated = d2[0] === d2[1] && d2[1] === d2[2];
+        const isOtherRepeated = dd2[0] === dd2[1] && dd2[1] === dd2[2];
+        if (isOtherRepeated && !isThisRepeated) continue;
+      }
+      prunedPlates.push(p);
+    }
+    rawPlates = prunedPlates.concat(rawPlates.filter(p => p.formatType !== 'XX-NNN-XX'));
+  }
+
+  return {
+    isValid: rawPlates.length > 0,
+    plates: rawPlates,
+    formattedPlate: rawPlates.length > 0 ? rawPlates.map(p => p.formattedPlate).join(', ') : null,
+    formatType: rawPlates.length > 0 ? rawPlates[0].formatType : null
+  };
+}
+
+function extractLicensePlate(rawText) {
+  const res = extractLicensePlates(rawText);
+  return {
+    isValid: res.isValid,
+    formattedPlate: res.formattedPlate,
+    formatType: res.formatType,
+    plates: res.plates
+  };
 }
 
 /**
@@ -199,7 +264,7 @@ async function findCandidatesOnBuffer(buf) {
     .toBuffer({ resolveWithObject: true });
 
   const w = info.width, h = info.height, len = w * h;
-  const startY = Math.floor(h * 0.25);
+  const startY = Math.floor(h * 0.20);
   const endY = Math.floor(h * 0.95);
   const grad = new Float32Array(len);
 
@@ -329,7 +394,7 @@ async function findCandidatesOnBuffer(buf) {
         const bw = maxX - minX + 1;
         const bh = maxY - minY + 1;
         const ar = bw / bh;
-        if (bw >= 50 && bw <= 350 && bh >= 15 && bh <= 100 && ar >= 1.8 && ar <= 5.5) {
+        if (bw >= 40 && bw <= 400 && bh >= 12 && bh <= 120 && ar >= 1.7 && ar <= 7.2) {
           candidates.push({
             origX: Math.floor(minX * scale),
             origY: Math.floor(minY * scale),
@@ -348,82 +413,202 @@ async function findCandidatesOnBuffer(buf) {
 }
 
 /**
- * Resilient Hierarchical Plate Recognition Pipeline
+ * Resilient Multi-Plate Recognition Pipeline
  */
 async function recognizePlate(imageBuffer) {
-  // Pass 1: Direct full image OCR (fastest for straight photos, ~400ms)
+  const foundMap = new Map();
+  let accumulatedText = '';
+
+  // Pass 1: Direct full image OCR (fast for straight single-car photos)
   try {
     const fullOcr = await tesseract.recognize(imageBuffer, 'eng');
-    const fullPlate = extractLicensePlate(fullOcr.data.text);
-    if (fullPlate.isValid) {
-      return { validation: fullPlate, rawText: fullOcr.data.text, method: 'full' };
-    }
+    const fullText = fullOcr.data.text || '';
+    accumulatedText += fullText;
+    const parsed = extractLicensePlates(fullText);
+    for (const p of parsed.plates) foundMap.set(p.formattedPlate, p.formatType);
   } catch (err) {
-    console.warn('Full image OCR pass warning:', err.message);
+    console.warn('Pass 1 full OCR warning:', err.message);
   }
 
-  // Pass 2: Unrotated candidate search (straight plates with complex backgrounds)
+  // Pass 2: Candidate Localization & Per-Candidate Local Deskewing
   try {
     const res0 = await findCandidatesOnBuffer(imageBuffer);
-    for (const cand of res0.candidates.slice(0, 3)) {
-      const padX = Math.floor(cand.origW * 0.12);
-      const padY = Math.floor(cand.origH * 0.15);
-      const x0 = Math.max(0, cand.origX - padX);
-      const y0 = Math.max(0, cand.origY - padY);
-      const w0 = Math.min(res0.meta.width - x0, cand.origW + padX * 2);
-      const h0 = Math.min(res0.meta.height - y0, cand.origH + padY * 2);
+    for (let ci = 0; ci < Math.min(5, res0.candidates.length); ci++) {
+      const cand = res0.candidates[ci];
+      let candFound = false;
 
-      const crop = await sharp(imageBuffer)
-        .extract({ left: x0, top: y0, width: w0, height: h0 })
-        .resize(Math.round(w0 * (200 / h0)), 200, { kernel: 'lanczos3' })
-        .png()
-        .toBuffer();
+      // 2a: Test straight crops (angle 0)
+      for (const padY of [0, Math.max(2, Math.floor(cand.origH * 0.05))]) {
+        const padX = Math.max(12, Math.floor(cand.origW * 0.08));
+        const x0 = Math.max(0, cand.origX - padX);
+        const y0 = Math.max(0, cand.origY - padY);
+        const w0 = Math.min(res0.meta.width - x0, cand.origW + padX * 2);
+        const h0 = Math.min(res0.meta.height - y0, cand.origH + padY * 2);
 
-      const ocr = await tesseract.recognize(crop, 'eng');
-      const plate = extractLicensePlate(ocr.data.text);
-      if (plate.isValid) {
-        return { validation: plate, rawText: ocr.data.text, method: 'candidate_0' };
+        const crop = await sharp(imageBuffer)
+          .extract({ left: x0, top: y0, width: w0, height: h0 })
+          .resize(Math.round(w0 * (200 / h0)), 200, { kernel: 'lanczos3' })
+          .extend({ top: 15, bottom: 15, left: 15, right: 15, background: '#ffffff' })
+          .png()
+          .toBuffer();
+
+        const ocr = await tesseract.recognize(crop, 'eng');
+        const text = ocr.data.text || '';
+        accumulatedText += ' ' + text;
+        const parsed = extractLicensePlates(text);
+        if (parsed.plates.some(p => p.formatType === 'XX-NNN-XX')) {
+          for (const p of parsed.plates) foundMap.set(p.formattedPlate, p.formatType);
+          candFound = true;
+          break;
+        }
+      }
+
+      // 2b: If straight crop did not yield a valid XX-NNN-XX plate, deskew locally around this vehicle
+      if (!candFound) {
+        const mx = Math.min(cand.origX, Math.floor(cand.origW * 0.80));
+        const my = Math.min(cand.origY, Math.floor(cand.origH * 1.20));
+        const subX = Math.max(0, cand.origX - mx);
+        const subY = Math.max(0, cand.origY - my);
+        const subW = Math.min(res0.meta.width - subX, cand.origW + mx * 2);
+        const subH = Math.min(res0.meta.height - subY, cand.origH + my * 2);
+
+        const subregion = await sharp(imageBuffer)
+          .extract({ left: subX, top: subY, width: subW, height: subH })
+          .toBuffer();
+
+        for (const angle of [13, -13, 10, -10, 12, 14]) {
+          const rotSub = await sharp(subregion)
+            .rotate(angle, { background: '#ffffff' })
+            .toBuffer();
+
+          const subCands = await findCandidatesOnBuffer(rotSub);
+          for (let sci = 0; sci < Math.min(2, subCands.candidates.length); sci++) {
+            const sc = subCands.candidates[sci];
+            const spadX = 25;
+            const spadY = 5;
+            const sx0 = Math.max(0, sc.origX - spadX);
+            const sy0 = Math.max(0, sc.origY - spadY);
+            const sw0 = Math.min(subCands.meta.width - sx0, sc.origW + spadX * 2);
+            const sh0 = Math.min(subCands.meta.height - sy0, sc.origH + spadY * 2);
+
+            for (const hFactor of [0.70, 1.0]) {
+              const curH = Math.max(10, Math.round(sh0 * hFactor));
+              const sCrop = await sharp(rotSub)
+                .extract({ left: sx0, top: sy0, width: sw0, height: curH })
+                .resize(Math.round(sw0 * (200 / curH)), 200, { kernel: 'lanczos3' })
+                .png()
+                .toBuffer();
+
+              const sOcr = await tesseract.recognize(sCrop, 'eng');
+              const sText = sOcr.data.text || '';
+              accumulatedText += ' ' + sText;
+              const sParsed = extractLicensePlates(sText);
+              if (sParsed.plates.some(p => p.formatType === 'XX-NNN-XX')) {
+                for (const p of sParsed.plates) foundMap.set(p.formattedPlate, p.formatType);
+                candFound = true;
+                break;
+              }
+            }
+            if (candFound) break;
+          }
+          if (candFound) break;
+        }
       }
     }
   } catch (err) {
     console.warn('Pass 2 candidate search warning:', err.message);
   }
 
-  // Pass 3: Multi-Angle Whole-Photo Rotation (for angled, tilted car photos)
-  const anglesToTry = [13, -13, 10, -10, 15, -15];
-  for (const angle of anglesToTry) {
-    try {
-      const rotBuffer = await sharp(imageBuffer)
-        .rotate(angle, { background: '#ffffff' })
-        .toBuffer();
-
-      const rotCands = await findCandidatesOnBuffer(rotBuffer);
-      for (const cand of rotCands.candidates.slice(0, 3)) {
-        const padX = Math.floor(cand.origW * 0.12);
-        const padY = Math.floor(cand.origH * 0.15);
-        const x0 = Math.max(0, cand.origX - padX);
-        const y0 = Math.max(0, cand.origY - padY);
-        const w0 = Math.min(rotCands.meta.width - x0, cand.origW + padX * 2);
-        const h0 = Math.min(rotCands.meta.height - y0, cand.origH + padY * 2);
-
-        const crop = await sharp(rotBuffer)
-          .extract({ left: x0, top: y0, width: w0, height: h0 })
-          .resize(Math.round(w0 * (200 / h0)), 200, { kernel: 'lanczos3' })
-          .png()
+  // Pass 3: Fallback whole-image rotation if no plates detected yet
+  if (foundMap.size === 0) {
+    const anglesToTry = [13, -13, 10, -10, 15, -15];
+    for (const angle of anglesToTry) {
+      try {
+        const rotBuffer = await sharp(imageBuffer)
+          .rotate(angle, { background: '#ffffff' })
           .toBuffer();
 
-        const ocr = await tesseract.recognize(crop, 'eng');
-        const plate = extractLicensePlate(ocr.data.text);
-        if (plate.isValid) {
-          return { validation: plate, rawText: ocr.data.text, method: `rot_${angle}` };
+        const rotCands = await findCandidatesOnBuffer(rotBuffer);
+        for (const cand of rotCands.candidates.slice(0, 3)) {
+          const padX = Math.floor(cand.origW * 0.12);
+          const padY = Math.floor(cand.origH * 0.15);
+          const x0 = Math.max(0, cand.origX - padX);
+          const y0 = Math.max(0, cand.origY - padY);
+          const w0 = Math.min(rotCands.meta.width - x0, cand.origW + padX * 2);
+          const h0 = Math.min(rotCands.meta.height - y0, cand.origH + padY * 2);
+
+          const crop = await sharp(rotBuffer)
+            .extract({ left: x0, top: y0, width: w0, height: h0 })
+            .resize(Math.round(w0 * (200 / h0)), 200, { kernel: 'lanczos3' })
+            .png()
+            .toBuffer();
+
+          const ocr = await tesseract.recognize(crop, 'eng');
+          const text = ocr.data.text || '';
+          accumulatedText += ' ' + text;
+          const parsed = extractLicensePlates(text);
+          if (parsed.plates.length > 0) {
+            for (const p of parsed.plates) foundMap.set(p.formattedPlate, p.formatType);
+            break;
+          }
         }
+        if (foundMap.size > 0) break;
+      } catch (err) {
+        console.warn(`Pass 3 rot_${angle} warning:`, err.message);
       }
-    } catch (err) {
-      console.warn(`Pass 3 rot_${angle} warning:`, err.message);
     }
   }
 
-  return { validation: { isValid: false, formattedPlate: null, formatType: null }, rawText: '' };
+  // Deduplicate and filter from foundMap
+  let rawPlates = Array.from(foundMap.entries()).map(([formattedPlate, formatType]) => ({
+    formattedPlate,
+    formatType
+  }));
+
+  const fullPlates = rawPlates.filter(p => p.formatType === 'XX-NNN-XX').map(p => p.formattedPlate);
+  if (fullPlates.length > 0) {
+    rawPlates = rawPlates.filter(p => {
+      if (p.formatType === 'XX-NNN-XX') return true;
+      for (const full of fullPlates) {
+        const fullDigits = full.split('-')[1];
+        if (p.formattedPlate.includes(fullDigits)) return false;
+      }
+      return true;
+    });
+
+    const xxPlates = rawPlates.filter(p => p.formatType === 'XX-NNN-XX');
+    const prunedPlates = [];
+    for (const p of xxPlates) {
+      const [l1, d2, l3] = p.formattedPlate.split('-');
+      const duplicate = xxPlates.find(other => {
+        if (other.formattedPlate === p.formattedPlate) return false;
+        const [ol1, od2, ol3] = other.formattedPlate.split('-');
+        return ol1 === l1 && ol3 === l3;
+      });
+      if (duplicate) {
+        const [dl1, dd2, dl3] = duplicate.formattedPlate.split('-');
+        const isThisRepeated = d2[0] === d2[1] && d2[1] === d2[2];
+        const isOtherRepeated = dd2[0] === dd2[1] && dd2[1] === dd2[2];
+        if (isOtherRepeated && !isThisRepeated) continue;
+      }
+      prunedPlates.push(p);
+    }
+    rawPlates = prunedPlates.concat(rawPlates.filter(p => p.formatType !== 'XX-NNN-XX'));
+  }
+
+  return {
+    isValid: rawPlates.length > 0,
+    plates: rawPlates,
+    formattedPlate: rawPlates.map(p => p.formattedPlate).join(', '),
+    formatType: rawPlates.length > 0 ? rawPlates[0].formatType : null,
+    validation: {
+      isValid: rawPlates.length > 0,
+      plates: rawPlates,
+      formattedPlate: rawPlates.map(p => p.formattedPlate).join(', '),
+      formatType: rawPlates.length > 0 ? rawPlates[0].formatType : null
+    },
+    rawText: accumulatedText
+  };
 }
 
 /**
@@ -448,28 +633,41 @@ app.post('/api/upload', upload.array('images', 10), async (req, res) => {
 
     for (const file of files) {
       const fileName = file.originalname;
-      let fileConfirmed = isConfirmed && plateNumber;
-      let filePlateNumber = plateNumber;
-      let fileFormatType = formatType;
+      let confirmedPlates = [];
       let fileRawText = rawText;
 
-      // Server-side resilient OCR fallback check if client did not detect plate
-      if (!fileConfirmed && file.buffer) {
-        try {
-          const recResult = await recognizePlate(file.buffer);
-          if (recResult.validation && recResult.validation.isValid) {
-            filePlateNumber = recResult.validation.formattedPlate;
-            fileFormatType = recResult.validation.formatType;
-            fileConfirmed = true;
-            fileRawText = (fileRawText ? fileRawText + ' | ' : '') + (recResult.rawText || '');
-            console.log(`✅ Resilient Server OCR rescued plate: ${filePlateNumber} (${fileFormatType}) via ${recResult.method || 'engine'}`);
-          }
-        } catch (ocrErr) {
-          console.warn('Server fallback OCR error:', ocrErr.message);
+      // Check if client provided plate(s)
+      if (initialPlateNumber) {
+        const clientParsed = extractLicensePlates(initialPlateNumber);
+        if (clientParsed.isValid) {
+          confirmedPlates = clientParsed.plates;
+        } else {
+          confirmedPlates.push({
+            formattedPlate: initialPlateNumber,
+            formatType: initialFormatType || 'XX-NNN-XX'
+          });
         }
       }
 
-      if (!fileConfirmed) {
+      // Always run server-side recognition if client didn't find plates OR to discover multiple plates
+      if (file.buffer) {
+        try {
+          const recResult = await recognizePlate(file.buffer);
+          if (recResult && recResult.isValid && recResult.plates.length > 0) {
+            for (const sp of recResult.plates) {
+              if (!confirmedPlates.some(cp => cp.formattedPlate === sp.formattedPlate)) {
+                confirmedPlates.push(sp);
+              }
+            }
+            fileRawText = (fileRawText ? fileRawText + ' | ' : '') + (recResult.rawText || '');
+            console.log(`✅ Multi-Plate Engine detected ${confirmedPlates.length} plate(s): ${confirmedPlates.map(p => p.formattedPlate).join(', ')}`);
+          }
+        } catch (ocrErr) {
+          console.warn('Server multi-plate OCR error:', ocrErr.message);
+        }
+      }
+
+      if (confirmedPlates.length === 0) {
         results.push({
           filename: fileName,
           status: 'Declined',
@@ -480,7 +678,7 @@ app.post('/api/upload', upload.array('images', 10), async (req, res) => {
         continue;
       }
 
-      // Optional Image Storage (Firebase Storage if enabled, otherwise safe metadata-only or compact)
+      // Optional Image Storage (Firebase Storage if enabled, otherwise safe compact base64)
       let imageUrl = '';
       if (bucket && process.env.FIREBASE_STORAGE_BUCKET) {
         try {
@@ -496,46 +694,57 @@ app.post('/api/upload', upload.array('images', 10), async (req, res) => {
           imageUrl = '';
         }
       } else if (file.buffer && file.buffer.length < 300 * 1024) {
-        // Only embed base64 if image is under 300KB to respect Firestore 1MB document limit
         imageUrl = `data:${file.mimetype};base64,${file.buffer.toString('base64')}`;
       }
 
       const timestamp = new Date().toISOString();
+      const savedDocIds = [];
 
-      // Save to Firestore
-      let docId = 'temp-' + Date.now();
-      if (db) {
-        const docRef = await db.collection('spotted_plates').add({
-          plate_number: filePlateNumber,
-          format_type: fileFormatType,
-          raw_text: fileRawText,
-          image_url: imageUrl,
-          status: 'Confirmed',
-          created_at: timestamp,
-          timestamp: admin.firestore.FieldValue.serverTimestamp()
-        });
-        docId = docRef.id;
+      // Save EACH detected license plate as an independent sighting in Firestore
+      for (const plateObj of confirmedPlates) {
+        let docId = 'temp-' + Date.now() + '-' + Math.random().toString(36).substring(2, 6);
+        if (db) {
+          try {
+            const docRef = await db.collection('spotted_plates').add({
+              plate_number: plateObj.formattedPlate,
+              format_type: plateObj.formatType,
+              raw_text: fileRawText,
+              image_url: imageUrl,
+              status: 'Confirmed',
+              created_at: timestamp,
+              timestamp: admin.firestore.FieldValue.serverTimestamp()
+            });
+            docId = docRef.id;
+          } catch (dbErr) {
+            console.error('Firestore save error:', dbErr.message);
+          }
+        }
+        savedDocIds.push(docId);
       }
 
       results.push({
         filename: fileName,
         status: 'Confirmed',
-        id: docId,
-        plate_number: filePlateNumber,
-        format_type: fileFormatType,
+        id: savedDocIds[0] || 'temp-' + Date.now(),
+        doc_ids: savedDocIds,
+        plates: confirmedPlates,
+        plate_number: confirmedPlates.map(p => p.formattedPlate).join(', '),
+        format_type: confirmedPlates.map(p => p.formatType).join(', '),
         raw_text: fileRawText,
         image_url: imageUrl,
         timestamp: timestamp
       });
     }
 
-    const confirmedCount = results.filter(r => r.status === 'Confirmed').length;
+    const confirmedPlatesCount = results
+      .filter(r => r.status === 'Confirmed')
+      .reduce((acc, r) => acc + (r.plates ? r.plates.length : 1), 0);
     const declinedCount = results.filter(r => r.status === 'Declined').length;
 
     return res.status(200).json({
       success: true,
       total: results.length,
-      confirmed: confirmedCount,
+      confirmed: confirmedPlatesCount,
       declined: declinedCount,
       results: results
     });

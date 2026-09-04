@@ -115,104 +115,151 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   /**
-   * Resilient License Plate Extractor (Supports 4 Formats)
+   * Resilient License Plate Extractor (Supports 4 Formats & Multi-Plate Detection)
    * 1) XX-NNN-XX  (e.g. BI-888-DA, AB-123-CD)
    * 2) XX-NNNN    (e.g. AB-1234)
    * 3) XXX-NNN    (e.g. ABC-123)
    * 4) NNNN-XX    (e.g. 1234-AB)
-   * Handles country flags (GE, EU, etc.), dashes, spaces, and OCR noise.
    */
-  function extractLicensePlate(rawText) {
-    if (!rawText) return { isValid: false, formattedPlate: null, formatType: null };
+  function extractLicensePlates(rawText) {
+    if (!rawText) return { isValid: false, plates: [], formattedPlate: null, formatType: null };
 
-    // 1. Normalize separators
-    const normalized = rawText.toUpperCase()
+    const preprocessed = rawText.toUpperCase()
+      .replace(/[|]/g, 'I')
+      .replace(/[\r\n]+/g, ' ');
+
+    const normalized = preprocessed
       .replace(/[—–_·•:]+/g, '-')
-      .replace(/[\r\n]+/g, ' ')
       .replace(/\s*-\s*/g, '-');
 
-    // Strip known country flag prefixes on left (GE, EU, AM, AZ, TR, UA, MD, etc.)
+    const squashed = normalized.replace(/\s+/g, '');
     const cleaned = normalized.replace(/\b(GE|EU|AM|AZ|TR|UA|MD|RO|BG|PL|DE|FR|IT|ES)[-\s]+/gi, '');
+    const textsToTry = [cleaned, normalized, squashed, preprocessed];
 
-    const textsToTry = [cleaned, normalized, rawText.toUpperCase().replace(/[\r\n]+/g, ' ')];
+    const foundMap = new Map();
+
+    function addPlate(p1, p2, p3, formatType) {
+      if (formatType === 'XX-NNN-XX') {
+        let l1 = fixLetters(p1), d2 = fixDigits(p2), l3 = fixLetters(p3);
+        if ((l1.startsWith('U') || l1.startsWith('Y')) && /^[A-Z]{2}$/.test(l1)) {
+          l1 = 'V' + l1.slice(1);
+        }
+        if (l1 === 'VI') l1 = 'VL';
+        if (/^[A-Z]{2}$/.test(l1) && /^\d{3}$/.test(d2) && /^[A-Z]{2}$/.test(l3)) {
+          foundMap.set(`${l1}-${d2}-${l3}`, 'XX-NNN-XX');
+        }
+      } else if (formatType === 'XX-NNNN') {
+        let l1 = fixLetters(p1), d2 = fixDigits(p2);
+        if (/^[A-Z]{2}$/.test(l1) && /^\d{4}$/.test(d2)) {
+          foundMap.set(`${l1}-${d2}`, 'XX-NNNN');
+        }
+      } else if (formatType === 'XXX-NNN') {
+        let l1 = fixLetters(p1), d2 = fixDigits(p2);
+        if (/^[A-Z]{3}$/.test(l1) && /^\d{3}$/.test(d2)) {
+          foundMap.set(`${l1}-${d2}`, 'XXX-NNN');
+        }
+      } else if (formatType === 'NNNN-XX') {
+        let d1 = fixDigits(p1), l2 = fixLetters(p2);
+        if (/^\d{4}$/.test(d1) && /^[A-Z]{2}$/.test(l2)) {
+          foundMap.set(`${d1}-${l2}`, 'NNNN-XX');
+        }
+      }
+    }
 
     for (const t of textsToTry) {
       // Format 1: XX-NNN-XX
-      const m1 = t.match(/(?:^|[^A-Z0-9])([A-Z0-9]{2})[- ]*([A-Z0-9]{3})[- ]*([A-Z0-9]{2})(?:$|[^A-Z0-9])/);
-      if (m1) {
-        let p1 = fixLetters(m1[1]), p2 = fixDigits(m1[2]), p3 = fixLetters(m1[3]);
-        if ((p1.startsWith('U') || p1.startsWith('Y')) && /^[A-Z]{2}$/.test(p1)) {
-          p1 = 'V' + p1.slice(1);
-        }
-        if (/^[A-Z]{2}$/.test(p1) && /^\d{3}$/.test(p2) && /^[A-Z]{2}$/.test(p3)) {
-          return { isValid: true, formattedPlate: `${p1}-${p2}-${p3}`, formatType: 'XX-NNN-XX' };
-        }
+      const regex1 = /(?:^|[^A-Z0-9])([A-Z0-9]{2,4})[-—–_·•:\s]*([0-9OQILZSB]{3})[-—–_·•:\s]*([A-Z0-9]{2})(?:$|[^A-Z0-9])/gi;
+      for (const m of t.matchAll(regex1)) {
+        const rawPrefix = m[1];
+        const p1 = rawPrefix.length > 2 ? rawPrefix.slice(-2) : rawPrefix;
+        addPlate(p1, m[2], m[3], 'XX-NNN-XX');
       }
 
       // Format 2: XX-NNNN
-      const m2 = t.match(/(?:^|[^A-Z0-9])([A-Z0-9]{2})[- ]*([A-Z0-9]{4})(?:$|[^A-Z0-9])/);
-      if (m2) {
-        let p1 = fixLetters(m2[1]), p2 = fixDigits(m2[2]);
-        if (/^[A-Z]{2}$/.test(p1) && /^\d{4}$/.test(p2)) {
-          return { isValid: true, formattedPlate: `${p1}-${p2}`, formatType: 'XX-NNNN' };
-        }
+      const regex2 = /(?:^|[^A-Z0-9])([A-Z0-9]{2})[- ]*([A-Z0-9]{4})(?:$|[^A-Z0-9])/g;
+      for (const m of t.matchAll(regex2)) {
+        addPlate(m[1], m[2], null, 'XX-NNNN');
       }
 
       // Format 3: XXX-NNN
-      const m3 = t.match(/(?:^|[^A-Z0-9])([A-Z0-9]{3})[- ]*([A-Z0-9]{3})(?:$|[^A-Z0-9])/);
-      if (m3) {
-        let p1 = fixLetters(m3[1]), p2 = fixDigits(m3[2]);
-        if (/^[A-Z]{3}$/.test(p1) && /^\d{3}$/.test(p2)) {
-          return { isValid: true, formattedPlate: `${p1}-${p2}`, formatType: 'XXX-NNN' };
-        }
+      const regex3 = /(?:^|[^A-Z0-9])([A-Z0-9]{3})[- ]*([A-Z0-9]{3})(?:$|[^A-Z0-9])/g;
+      for (const m of t.matchAll(regex3)) {
+        addPlate(m[1], m[2], null, 'XXX-NNN');
       }
 
       // Format 4: NNNN-XX
-      const m4 = t.match(/(?:^|[^A-Z0-9])([A-Z0-9]{4})[- ]*([A-Z0-9]{2})(?:$|[^A-Z0-9])/);
-      if (m4) {
-        let p1 = fixDigits(m4[1]), p2 = fixLetters(m4[2]);
-        if (/^\d{4}$/.test(p1) && /^[A-Z]{2}$/.test(p2)) {
-          return { isValid: true, formattedPlate: `${p1}-${p2}`, formatType: 'NNNN-XX' };
-        }
+      const regex4 = /(?:^|[^A-Z0-9])([A-Z0-9]{4})[- ]*([A-Z0-9]{2})(?:$|[^A-Z0-9])/g;
+      for (const m of t.matchAll(regex4)) {
+        addPlate(m[1], m[2], null, 'NNNN-XX');
       }
     }
 
-    // 2. Token-by-token scan with sliding window
     const tokens = normalized.match(/[A-Z0-9]{6,12}/g) || [];
     for (const token of tokens) {
       if (token.length === 7) {
-        let p1 = fixLetters(token.slice(0, 2)), p2 = fixDigits(token.slice(2, 5)), p3 = fixLetters(token.slice(5, 7));
-        if (p1.startsWith('U') || p1.startsWith('Y')) p1 = 'V' + p1.slice(1);
-        if (/^[A-Z]{2}$/.test(p1) && /^\d{3}$/.test(p2) && /^[A-Z]{2}$/.test(p3)) {
-          return { isValid: true, formattedPlate: `${p1}-${p2}-${p3}`, formatType: 'XX-NNN-XX' };
-        }
+        addPlate(token.slice(0, 2), token.slice(2, 5), token.slice(5, 7), 'XX-NNN-XX');
       }
       if (token.length === 9) {
-        // e.g. country prefix + plate (GEBI888DA -> BI888DA)
         const sub = token.slice(2);
-        let p1 = fixLetters(sub.slice(0, 2)), p2 = fixDigits(sub.slice(2, 5)), p3 = fixLetters(sub.slice(5, 7));
-        if (p1.startsWith('U') || p1.startsWith('Y')) p1 = 'V' + p1.slice(1);
-        if (/^[A-Z]{2}$/.test(p1) && /^\d{3}$/.test(p2) && /^[A-Z]{2}$/.test(p3)) {
-          return { isValid: true, formattedPlate: `${p1}-${p2}-${p3}`, formatType: 'XX-NNN-XX' };
-        }
+        addPlate(sub.slice(0, 2), sub.slice(2, 5), sub.slice(5, 7), 'XX-NNN-XX');
       }
       if (token.length === 6) {
-        const p1 = fixLetters(token.slice(0, 2)), p2 = fixDigits(token.slice(2, 6));
-        if (/^[A-Z]{2}$/.test(p1) && /^\d{4}$/.test(p2)) {
-          return { isValid: true, formattedPlate: `${p1}-${p2}`, formatType: 'XX-NNNN' };
-        }
-        const q1 = fixLetters(token.slice(0, 3)), q2 = fixDigits(token.slice(3, 6));
-        if (/^[A-Z]{3}$/.test(q1) && /^\d{3}$/.test(q2)) {
-          return { isValid: true, formattedPlate: `${q1}-${q2}`, formatType: 'XXX-NNN' };
-        }
-        const r1 = fixDigits(token.slice(0, 4)), r2 = fixLetters(token.slice(4, 6));
-        if (/^\d{4}$/.test(r1) && /^[A-Z]{2}$/.test(r2)) {
-          return { isValid: true, formattedPlate: `${r1}-${r2}`, formatType: 'NNNN-XX' };
-        }
+        addPlate(token.slice(0, 2), token.slice(2, 6), null, 'XX-NNNN');
       }
     }
 
-    return { isValid: false, formattedPlate: null, formatType: null };
+    let rawPlates = Array.from(foundMap.entries()).map(([formattedPlate, formatType]) => ({
+      formattedPlate,
+      formatType
+    }));
+
+    const fullPlates = rawPlates.filter(p => p.formatType === 'XX-NNN-XX').map(p => p.formattedPlate);
+    if (fullPlates.length > 0) {
+      rawPlates = rawPlates.filter(p => {
+        if (p.formatType === 'XX-NNN-XX') return true;
+        for (const full of fullPlates) {
+          const fullDigits = full.split('-')[1];
+          if (p.formattedPlate.includes(fullDigits)) return false;
+        }
+        return true;
+      });
+
+      const xxPlates = rawPlates.filter(p => p.formatType === 'XX-NNN-XX');
+      const prunedPlates = [];
+      for (const p of xxPlates) {
+        const [l1, d2, l3] = p.formattedPlate.split('-');
+        const duplicate = xxPlates.find(other => {
+          if (other.formattedPlate === p.formattedPlate) return false;
+          const [ol1, od2, ol3] = other.formattedPlate.split('-');
+          return ol1 === l1 && ol3 === l3;
+        });
+        if (duplicate) {
+          const [dl1, dd2, dl3] = duplicate.formattedPlate.split('-');
+          const isThisRepeated = d2[0] === d2[1] && d2[1] === d2[2];
+          const isOtherRepeated = dd2[0] === dd2[1] && dd2[1] === dd2[2];
+          if (isOtherRepeated && !isThisRepeated) continue;
+        }
+        prunedPlates.push(p);
+      }
+      rawPlates = prunedPlates.concat(rawPlates.filter(p => p.formatType !== 'XX-NNN-XX'));
+    }
+
+    return {
+      isValid: rawPlates.length > 0,
+      plates: rawPlates,
+      formattedPlate: rawPlates.length > 0 ? rawPlates.map(p => p.formattedPlate).join(', ') : null,
+      formatType: rawPlates.length > 0 ? rawPlates[0].formatType : null
+    };
+  }
+
+  function extractLicensePlate(rawText) {
+    const res = extractLicensePlates(rawText);
+    return {
+      isValid: res.isValid,
+      formattedPlate: res.formattedPlate,
+      formatType: res.formatType,
+      plates: res.plates
+    };
   }
 
   // --- Canvas Preprocessor with Gentle Grayscale, Rotation & Smart Cropping ---
@@ -427,7 +474,13 @@ document.addEventListener('DOMContentLoaded', () => {
 
     results.forEach(item => {
       const isConfirmed = item.status === 'Confirmed';
-      if (isConfirmed) totalConfirmed++; else totalDeclined++;
+      const hasMultiplePlates = isConfirmed && item.plates && item.plates.length > 1;
+
+      if (isConfirmed) {
+        totalConfirmed += hasMultiplePlates ? item.plates.length : 1;
+      } else {
+        totalDeclined++;
+      }
 
       const row = document.createElement('tr');
 
@@ -435,16 +488,26 @@ document.addEventListener('DOMContentLoaded', () => {
         ? `<span class="badge-confirmed">✓ Confirmed</span>`
         : `<span class="badge-declined">✕ Declined</span>`;
 
-      const plateCell = isConfirmed
-        ? `<span class="plate-mono">${item.plate_number}</span>`
-        : `<span style="color: var(--text-dim); font-style: italic;">None detected</span>`;
+      let plateCell;
+      if (!isConfirmed) {
+        plateCell = `<span style="color: var(--text-dim); font-style: italic;">None detected</span>`;
+      } else if (hasMultiplePlates) {
+        plateCell = item.plates.map(p => `<span class="plate-mono" style="margin: 2px 4px 2px 0; display: inline-block;">${p.formattedPlate}</span>`).join('');
+      } else {
+        plateCell = `<span class="plate-mono">${item.plate_number}</span>`;
+      }
 
-      const formatCell = item.format_type
-        ? `<span class="format-tag">${item.format_type}</span>`
-        : `<span style="color: var(--text-dim);">-</span>`;
+      let formatCell;
+      if (!isConfirmed) {
+        formatCell = `<span style="color: var(--text-dim);">-</span>`;
+      } else if (hasMultiplePlates) {
+        formatCell = item.plates.map(p => `<span class="format-tag" style="margin: 2px 4px 2px 0; display: inline-block;">${p.formatType}</span>`).join('');
+      } else {
+        formatCell = item.format_type ? `<span class="format-tag">${item.format_type}</span>` : `<span style="color: var(--text-dim);">-</span>`;
+      }
 
       const detailsCell = isConfirmed
-        ? `<span style="color: #34d399;">Valid license plate format saved</span>`
+        ? `<span style="color: #34d399;">${hasMultiplePlates ? `${item.plates.length} license plates registered` : 'Valid license plate format saved'}</span>`
         : `<span style="color: #f87171;">${item.reason || 'Invalid format'}</span>`;
 
       row.innerHTML = `
