@@ -362,6 +362,7 @@ app.get('/api/search/:plate?', async (req, res) => {
 app.get('/api/health', (req, res) => {
   res.json({
     status: 'online',
+    version: '2.1.0-resilient-ocr',
     firebase_connected: !!db,
     storage_connected: !!bucket,
     timestamp: new Date()
